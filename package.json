@@ -1,5 +1,5 @@
 {
-  "name": "gdif",
+  "name": "@abhash157/gdif",
   "version": "1.0.0",
   "description": "Lightweight, Git-like Version Control System (VCS) CLI",
   "main": "src/index.js",
