@@ -1,11 +1,11 @@
 {
-  "name": "mysync",
+  "name": "gdif",
   "version": "1.0.0",
   "description": "Lightweight, Git-like Version Control System (VCS) CLI",
   "main": "src/index.js",
   "type": "module",
   "bin": {
-    "mysync": "bin/cli.js"
+    "gdif": "bin/cli.js"
   },
   "scripts": {
     "start": "node bin/cli.js",

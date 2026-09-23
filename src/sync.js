@@ -5,7 +5,7 @@ import {
   setRemote,
   updateRemoteBranchRef,
   initRepo,
-  MYSYNC_DIR,
+  GDIF_DIR,
   getHeadInfo
 } from './repo.js';
 import { checkout } from './branch.js';
@@ -20,7 +20,7 @@ import {
 function getObjectPath(repoRoot, hash) {
   const dir = hash.slice(0, 2);
   const file = hash.slice(2);
-  return path.join(repoRoot, MYSYNC_DIR, 'objects', dir, file);
+  return path.join(repoRoot, GDIF_DIR, 'objects', dir, file);
 }
 
 /**
@@ -102,7 +102,7 @@ function collectObjects(repoRoot, startCommitHash, stopCommitHash) {
  */
 export async function fetch(repoRoot, remoteName) {
   const remoteUrl = getRemote(repoRoot, remoteName);
-  if (!remoteUrl) throw new Error(`fatal: '${remoteName}' does not appear to be a mysync repository`);
+  if (!remoteUrl) throw new Error(`fatal: '${remoteName}' does not appear to be a gdif repository`);
   
   console.log(`Fetching from ${remoteUrl}...`);
   const refs = await fetchRemoteRefs(remoteUrl);
@@ -138,7 +138,7 @@ export async function clone(url, targetDir) {
   
   if (defaultBranch) {
     const commitHash = refs[defaultBranch];
-    const branchPath = path.join(repoRoot, MYSYNC_DIR, 'refs', 'heads', defaultBranch);
+    const branchPath = path.join(repoRoot, GDIF_DIR, 'refs', 'heads', defaultBranch);
     fs.mkdirSync(path.dirname(branchPath), { recursive: true });
     fs.writeFileSync(branchPath, `${commitHash}\n`, 'utf8');
     
@@ -165,10 +165,10 @@ export async function pull(repoRoot, remoteName, branchName) {
   // Fast forward (simply checkout targetHash but update branch ref)
   checkout(repoRoot, targetHash);
   // Re-attach HEAD to branch
-  const headPath = path.join(repoRoot, MYSYNC_DIR, 'HEAD');
+  const headPath = path.join(repoRoot, GDIF_DIR, 'HEAD');
   fs.writeFileSync(headPath, `ref: refs/heads/${branchName}\n`, 'utf8');
   // Update branch ref
-  const branchPath = path.join(repoRoot, MYSYNC_DIR, 'refs', 'heads', branchName);
+  const branchPath = path.join(repoRoot, GDIF_DIR, 'refs', 'heads', branchName);
   fs.writeFileSync(branchPath, `${targetHash}\n`, 'utf8');
   
   console.log(`Fast-forwarded ${branchName} to ${targetHash.slice(0, 7)}`);
@@ -179,7 +179,7 @@ export async function pull(repoRoot, remoteName, branchName) {
  */
 export async function push(repoRoot, remoteName, branchName) {
   const remoteUrl = getRemote(repoRoot, remoteName);
-  if (!remoteUrl) throw new Error(`fatal: '${remoteName}' does not appear to be a mysync repository`);
+  if (!remoteUrl) throw new Error(`fatal: '${remoteName}' does not appear to be a gdif repository`);
   
   const headInfo = getHeadInfo(repoRoot);
   const localHash = headInfo.commitHash;

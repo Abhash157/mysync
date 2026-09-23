@@ -17,8 +17,8 @@ function runCli(args, cwd) {
     encoding: 'utf8',
     env: {
       ...process.env,
-      MYSYNC_AUTHOR_NAME: 'Test User',
-      MYSYNC_AUTHOR_EMAIL: 'test@mysync.local',
+      GDIF_AUTHOR_NAME: 'Test User',
+      GDIF_AUTHOR_EMAIL: 'test@gdif.local',
     },
   });
 }
@@ -35,7 +35,7 @@ async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-console.log('Running mysync remote syncing test suite...\n');
+console.log('Running gdif remote syncing test suite...\n');
 
 async function runTests() {
   cleanSandbox();
@@ -48,7 +48,7 @@ async function runTests() {
   runCli(['commit', '-m', 'Initial commit in Repo A'], repoA);
 
   // 2. Start server on Repo A
-  console.log('2. Starting mysync server on Repo A (port 3030)...');
+  console.log('2. Starting gdif server on Repo A (port 3030)...');
   const serverProc = spawn(process.execPath, [cliPath, 'serve', '-p', '3030'], {
     cwd: repoA,
     stdio: 'inherit'

@@ -111,7 +111,7 @@ export function formatStatus(status) {
   if (hasStaged) {
     lines.push('');
     lines.push('Changes to be committed:');
-    lines.push('  (use "mysync restore --staged <file>..." to unstage)');
+    lines.push('  (use "gdif restore --staged <file>..." to unstage)');
     status.staged.added.forEach((f) => lines.push(`\t\x1b[32mnew file:   ${f}\x1b[0m`));
     status.staged.modified.forEach((f) => lines.push(`\t\x1b[32mmodified:   ${f}\x1b[0m`));
     status.staged.deleted.forEach((f) => lines.push(`\t\x1b[32mdeleted:    ${f}\x1b[0m`));
@@ -124,8 +124,8 @@ export function formatStatus(status) {
   if (hasUnstaged) {
     lines.push('');
     lines.push('Changes not staged for commit:');
-    lines.push('  (use "mysync add <file>..." to update what will be committed)');
-    lines.push('  (use "mysync restore <file>..." to discard changes in working directory)');
+    lines.push('  (use "gdif add <file>..." to update what will be committed)');
+    lines.push('  (use "gdif restore <file>..." to discard changes in working directory)');
     status.unstaged.modified.forEach((f) => lines.push(`\t\x1b[31mmodified:   ${f}\x1b[0m`));
     status.unstaged.deleted.forEach((f) => lines.push(`\t\x1b[31mdeleted:    ${f}\x1b[0m`));
   }
@@ -133,7 +133,7 @@ export function formatStatus(status) {
   if (status.untracked.length > 0) {
     lines.push('');
     lines.push('Untracked files:');
-    lines.push('  (use "mysync add <file>..." to include in what will be committed)');
+    lines.push('  (use "gdif add <file>..." to include in what will be committed)');
     status.untracked.forEach((f) => lines.push(`\t\x1b[31m${f}\x1b[0m`));
   }
 
@@ -142,7 +142,7 @@ export function formatStatus(status) {
       lines.push('nothing to commit, working tree clean');
     } else {
       lines.push('');
-      lines.push('nothing to commit (create/copy files and use "mysync add" to track)');
+      lines.push('nothing to commit (create/copy files and use "gdif add" to track)');
     }
   }
 

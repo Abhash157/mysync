@@ -114,8 +114,8 @@ export function createCommit(repoRoot, message, authorOverride = {}) {
 
   const config = getConfig(repoRoot);
   const author = {
-    name: authorOverride.name || config.user?.name || 'mysync-user',
-    email: authorOverride.email || config.user?.email || 'user@mysync.local',
+    name: authorOverride.name || config.user?.name || 'gdif-user',
+    email: authorOverride.email || config.user?.email || 'user@gdif.local',
     timestamp: Math.floor(Date.now() / 1000),
   };
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { MYSYNC_DIR } from './repo.js';
+import { GDIF_DIR } from './repo.js';
 import { writeBlob } from './objects.js';
 import { createIgnoreFilter, isPathIgnored, toPosix } from './ignore.js';
 
@@ -10,7 +10,7 @@ import { createIgnoreFilter, isPathIgnored, toPosix } from './ignore.js';
  * @returns {string}
  */
 export function getIndexPath(repoRoot) {
-  return path.join(repoRoot, MYSYNC_DIR, 'index');
+  return path.join(repoRoot, GDIF_DIR, 'index');
 }
 
 /**

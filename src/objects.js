@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
-import { MYSYNC_DIR } from './repo.js';
+import { GDIF_DIR } from './repo.js';
 
 /**
- * Gets path to object in .mysync/objects/
+ * Gets path to object in .gdif/objects/
  * @param {string} repoRoot
  * @param {string} hash
  * @returns {string}
@@ -13,7 +13,7 @@ import { MYSYNC_DIR } from './repo.js';
 export function getObjectPath(repoRoot, hash) {
   const dir = hash.slice(0, 2);
   const file = hash.slice(2);
-  return path.join(repoRoot, MYSYNC_DIR, 'objects', dir, file);
+  return path.join(repoRoot, GDIF_DIR, 'objects', dir, file);
 }
 
 /**
@@ -199,7 +199,7 @@ export function readCommit(repoRoot, commitHash) {
 
   let treeHash = null;
   let parentHash = null;
-  let author = { name: 'Unknown', email: 'unknown@mysync', timestamp: 0 };
+  let author = { name: 'Unknown', email: 'unknown@gdif', timestamp: 0 };
 
   for (const line of headerPart.split('\n')) {
     if (line.startsWith('tree ')) {

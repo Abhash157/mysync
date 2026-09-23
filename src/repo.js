@@ -1,17 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const MYSYNC_DIR = '.mysync';
+export const GDIF_DIR = '.gdif';
 
 /**
- * Finds the root directory containing the .mysync folder by walking up from startDir.
+ * Finds the root directory containing the .gdif folder by walking up from startDir.
  * @param {string} [startDir=process.cwd()]
  * @returns {string|null} Root path of repository, or null if not inside a repository.
  */
 export function findRepoRoot(startDir = process.cwd()) {
   let current = path.resolve(startDir);
   while (true) {
-    const candidate = path.join(current, MYSYNC_DIR);
+    const candidate = path.join(current, GDIF_DIR);
     if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
       return current;
     }
@@ -25,41 +25,41 @@ export function findRepoRoot(startDir = process.cwd()) {
 }
 
 /**
- * Gets the .mysync directory path, throwing if not in a repository.
+ * Gets the .gdif directory path, throwing if not in a repository.
  * @param {string} [startDir=process.cwd()]
- * @returns {string} Path to .mysync directory
+ * @returns {string} Path to .gdif directory
  */
 export function requireRepoRoot(startDir = process.cwd()) {
   const root = findRepoRoot(startDir);
   if (!root) {
-    throw new Error('fatal: not a mysync repository (or any of the parent directories): .mysync');
+    throw new Error('fatal: not a gdif repository (or any of the parent directories): .gdif');
   }
   return root;
 }
 
 /**
- * Initializes a new mysync repository.
+ * Initializes a new gdif repository.
  * @param {string} [targetDir=process.cwd()]
  * @param {string} [defaultBranch='main']
  * @returns {{ initialized: boolean, path: string }}
  */
 export function initRepo(targetDir = process.cwd(), defaultBranch = 'main') {
   const root = path.resolve(targetDir);
-  const mysyncPath = path.join(root, MYSYNC_DIR);
+  const gdifPath = path.join(root, GDIF_DIR);
 
-  if (fs.existsSync(mysyncPath)) {
+  if (fs.existsSync(gdifPath)) {
     return { initialized: false, path: root };
   }
 
   // Create directory structure
-  fs.mkdirSync(path.join(mysyncPath, 'objects'), { recursive: true });
-  fs.mkdirSync(path.join(mysyncPath, 'refs', 'heads'), { recursive: true });
+  fs.mkdirSync(path.join(gdifPath, 'objects'), { recursive: true });
+  fs.mkdirSync(path.join(gdifPath, 'refs', 'heads'), { recursive: true });
 
   // Initialize HEAD pointing to default branch
-  fs.writeFileSync(path.join(mysyncPath, 'HEAD'), `ref: refs/heads/${defaultBranch}\n`, 'utf8');
+  fs.writeFileSync(path.join(gdifPath, 'HEAD'), `ref: refs/heads/${defaultBranch}\n`, 'utf8');
 
   // Initialize empty index file
-  fs.writeFileSync(path.join(mysyncPath, 'index'), JSON.stringify({}, null, 2), 'utf8');
+  fs.writeFileSync(path.join(gdifPath, 'index'), JSON.stringify({}, null, 2), 'utf8');
 
   // Initialize config file
   const config = {
@@ -68,11 +68,11 @@ export function initRepo(targetDir = process.cwd(), defaultBranch = 'main') {
       defaultBranch,
     },
     user: {
-      name: process.env.MYSYNC_AUTHOR_NAME || process.env.USER || process.env.USERNAME || 'mysync-user',
-      email: process.env.MYSYNC_AUTHOR_EMAIL || 'user@mysync.local',
+      name: process.env.GDIF_AUTHOR_NAME || process.env.USER || process.env.USERNAME || 'gdif-user',
+      email: process.env.GDIF_AUTHOR_EMAIL || 'user@gdif.local',
     },
   };
-  fs.writeFileSync(path.join(mysyncPath, 'config.json'), JSON.stringify(config, null, 2), 'utf8');
+  fs.writeFileSync(path.join(gdifPath, 'config.json'), JSON.stringify(config, null, 2), 'utf8');
 
   return { initialized: true, path: root };
 }
@@ -83,7 +83,7 @@ export function initRepo(targetDir = process.cwd(), defaultBranch = 'main') {
  * @returns {{ isBranch: boolean, branch: string|null, commitHash: string|null, headContent: string }}
  */
 export function getHeadInfo(repoRoot) {
-  const headPath = path.join(repoRoot, MYSYNC_DIR, 'HEAD');
+  const headPath = path.join(repoRoot, GDIF_DIR, 'HEAD');
   if (!fs.existsSync(headPath)) {
     throw new Error('fatal: Corrupted repository: HEAD file missing');
   }
@@ -92,7 +92,7 @@ export function getHeadInfo(repoRoot) {
   if (headContent.startsWith('ref: ')) {
     const refRelative = headContent.slice(5).trim();
     const branchName = refRelative.replace(/^refs\/heads\//, '');
-    const refFile = path.join(repoRoot, MYSYNC_DIR, refRelative);
+    const refFile = path.join(repoRoot, GDIF_DIR, refRelative);
     const commitHash = fs.existsSync(refFile) ? fs.readFileSync(refFile, 'utf8').trim() : null;
 
     return {
@@ -119,7 +119,7 @@ export function getHeadInfo(repoRoot) {
  * @param {boolean} [asBranch=true]
  */
 export function setHead(repoRoot, target, asBranch = true) {
-  const headPath = path.join(repoRoot, MYSYNC_DIR, 'HEAD');
+  const headPath = path.join(repoRoot, GDIF_DIR, 'HEAD');
   if (asBranch) {
     const branchRef = target.startsWith('refs/heads/') ? target : `refs/heads/${target}`;
     fs.writeFileSync(headPath, `ref: ${branchRef}\n`, 'utf8');
@@ -135,7 +135,7 @@ export function setHead(repoRoot, target, asBranch = true) {
  * @param {string} commitHash
  */
 export function updateBranchRef(repoRoot, branchName, commitHash) {
-  const refPath = path.join(repoRoot, MYSYNC_DIR, 'refs', 'heads', branchName);
+  const refPath = path.join(repoRoot, GDIF_DIR, 'refs', 'heads', branchName);
   fs.mkdirSync(path.dirname(refPath), { recursive: true });
   fs.writeFileSync(refPath, `${commitHash}\n`, 'utf8');
 }
@@ -146,7 +146,7 @@ export function updateBranchRef(repoRoot, branchName, commitHash) {
  * @returns {object}
  */
 export function getConfig(repoRoot) {
-  const configPath = path.join(repoRoot, MYSYNC_DIR, 'config.json');
+  const configPath = path.join(repoRoot, GDIF_DIR, 'config.json');
   if (fs.existsSync(configPath)) {
     try {
       return JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -157,8 +157,8 @@ export function getConfig(repoRoot) {
   return {
     core: { repositoryformatversion: 1 },
     user: {
-      name: process.env.MYSYNC_AUTHOR_NAME || process.env.USER || process.env.USERNAME || 'mysync-user',
-      email: process.env.MYSYNC_AUTHOR_EMAIL || 'user@mysync.local',
+      name: process.env.GDIF_AUTHOR_NAME || process.env.USER || process.env.USERNAME || 'gdif-user',
+      email: process.env.GDIF_AUTHOR_EMAIL || 'user@gdif.local',
     },
     remotes: {},
   };
@@ -170,7 +170,7 @@ export function getConfig(repoRoot) {
  * @param {object} config
  */
 export function writeConfig(repoRoot, config) {
-  const configPath = path.join(repoRoot, MYSYNC_DIR, 'config.json');
+  const configPath = path.join(repoRoot, GDIF_DIR, 'config.json');
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
 }
 
@@ -206,7 +206,7 @@ export function getRemote(repoRoot, remoteName) {
  * @param {string} commitHash
  */
 export function updateRemoteBranchRef(repoRoot, remoteName, branchName, commitHash) {
-  const refPath = path.join(repoRoot, MYSYNC_DIR, 'refs', 'remotes', remoteName, branchName);
+  const refPath = path.join(repoRoot, GDIF_DIR, 'refs', 'remotes', remoteName, branchName);
   fs.mkdirSync(path.dirname(refPath), { recursive: true });
   fs.writeFileSync(refPath, `${commitHash}\n`, 'utf8');
 }
@@ -219,7 +219,7 @@ export function updateRemoteBranchRef(repoRoot, remoteName, branchName, commitHa
  * @returns {string|null}
  */
 export function getRemoteBranchRef(repoRoot, remoteName, branchName) {
-  const refPath = path.join(repoRoot, MYSYNC_DIR, 'refs', 'remotes', remoteName, branchName);
+  const refPath = path.join(repoRoot, GDIF_DIR, 'refs', 'remotes', remoteName, branchName);
   if (fs.existsSync(refPath)) {
     return fs.readFileSync(refPath, 'utf8').trim();
   }

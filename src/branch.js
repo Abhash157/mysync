@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { MYSYNC_DIR, getHeadInfo, setHead, updateBranchRef } from './repo.js';
+import { GDIF_DIR, getHeadInfo, setHead, updateBranchRef } from './repo.js';
 import { readCommit, readBlob } from './objects.js';
 import { flattenTree } from './commit.js';
 import { readIndex, writeIndex } from './staging.js';
@@ -12,7 +12,7 @@ import { getStatus } from './status.js';
  * @returns {Array<{ name: string, isCurrent: boolean, commitHash: string }>}
  */
 export function listBranches(repoRoot) {
-  const headsDir = path.join(repoRoot, MYSYNC_DIR, 'refs', 'heads');
+  const headsDir = path.join(repoRoot, GDIF_DIR, 'refs', 'heads');
   if (!fs.existsSync(headsDir)) {
     return [];
   }
@@ -40,7 +40,7 @@ export function createBranch(repoRoot, branchName) {
     throw new Error(`fatal: '${branchName}' is not a valid branch name.`);
   }
 
-  const headsDir = path.join(repoRoot, MYSYNC_DIR, 'refs', 'heads');
+  const headsDir = path.join(repoRoot, GDIF_DIR, 'refs', 'heads');
   const targetBranchFile = path.join(headsDir, branchName);
 
   if (fs.existsSync(targetBranchFile)) {
@@ -66,7 +66,7 @@ export function deleteBranch(repoRoot, branchName) {
     throw new Error(`fatal: Cannot delete branch '${branchName}' checked out at '${repoRoot}'`);
   }
 
-  const branchPath = path.join(repoRoot, MYSYNC_DIR, 'refs', 'heads', branchName);
+  const branchPath = path.join(repoRoot, GDIF_DIR, 'refs', 'heads', branchName);
   if (!fs.existsSync(branchPath)) {
     throw new Error(`error: branch '${branchName}' not found.`);
   }
@@ -82,7 +82,7 @@ export function deleteBranch(repoRoot, branchName) {
  * @param {boolean} [options.create=false] Create and switch to new branch
  */
 export function checkout(repoRoot, target, { create = false } = {}) {
-  const branchPath = path.join(repoRoot, MYSYNC_DIR, 'refs', 'heads', target);
+  const branchPath = path.join(repoRoot, GDIF_DIR, 'refs', 'heads', target);
   let targetCommitHash = null;
   let isTargetBranch = false;
 
@@ -99,7 +99,7 @@ export function checkout(repoRoot, target, { create = false } = {}) {
       const commit = readCommit(repoRoot, target);
       targetCommitHash = target;
     } catch {
-      throw new Error(`error: pathspec '${target}' did not match any file(s) known to mysync`);
+      throw new Error(`error: pathspec '${target}' did not match any file(s) known to gdif`);
     }
   }
 
@@ -184,7 +184,7 @@ export function restore(repoRoot, filePaths, { staged = false } = {}) {
     } else {
       // Discard working tree changes: restore from index
       if (!index[relTarget]) {
-        throw new Error(`error: pathspec '${targetPath}' did not match any file(s) known to mysync`);
+        throw new Error(`error: pathspec '${targetPath}' did not match any file(s) known to gdif`);
       }
       const fullPath = path.join(repoRoot, relTarget);
       const content = readBlob(repoRoot, index[relTarget].hash);

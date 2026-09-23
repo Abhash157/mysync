@@ -2,10 +2,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { listBranches } from './branch.js';
-import { updateBranchRef, MYSYNC_DIR } from './repo.js';
+import { updateBranchRef, GDIF_DIR } from './repo.js';
 
 /**
- * Gets path to object in .mysync/objects/
+ * Gets path to object in .gdif/objects/
  * @param {string} repoRoot
  * @param {string} hash
  * @returns {string}
@@ -13,7 +13,7 @@ import { updateBranchRef, MYSYNC_DIR } from './repo.js';
 function getObjectPath(repoRoot, hash) {
   const dir = hash.slice(0, 2);
   const file = hash.slice(2);
-  return path.join(repoRoot, MYSYNC_DIR, 'objects', dir, file);
+  return path.join(repoRoot, GDIF_DIR, 'objects', dir, file);
 }
 
 /**
@@ -108,7 +108,7 @@ export function serve(repoRoot, port = 3000) {
   });
 
   server.listen(port, () => {
-    console.log(`mysync server listening on port ${port}`);
-    console.log(`To clone: mysync clone http://<your-ip>:${port} my-repo`);
+    console.log(`gdif server listening on port ${port}`);
+    console.log(`To clone: gdif clone http://<your-ip>:${port} my-repo`);
   });
 }

@@ -100,7 +100,7 @@ export function createUnifiedDiff(filePath, oldContent, newContent, { context = 
   }
 
   const output = [
-    `\x1b[1mdiff --mysync a/${filePath} b/${filePath}\x1b[0m`,
+    `\x1b[1mdiff --gdif a/${filePath} b/${filePath}\x1b[0m`,
     `--- a/${filePath}`,
     `+++ b/${filePath}`,
   ];

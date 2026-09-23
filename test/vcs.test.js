@@ -19,8 +19,8 @@ function runCli(args, cwd = sandboxDir) {
     encoding: 'utf8',
     env: {
       ...process.env,
-      MYSYNC_AUTHOR_NAME: 'Test User',
-      MYSYNC_AUTHOR_EMAIL: 'test@mysync.local',
+      GDIF_AUTHOR_NAME: 'Test User',
+      GDIF_AUTHOR_EMAIL: 'test@gdif.local',
     },
   });
   return stripAnsi(output);
@@ -33,28 +33,28 @@ function cleanSandbox() {
   fs.mkdirSync(sandboxDir, { recursive: true });
 }
 
-console.log('Running mysync test suite...\n');
+console.log('Running gdif test suite...\n');
 
 try {
   cleanSandbox();
 
   // 1. Test init
-  console.log('1. Testing "mysync init"...');
+  console.log('1. Testing "gdif init"...');
   const initOutput = runCli(['init']);
-  assert(initOutput.includes('Initialized empty mysync repository'), 'Init output mismatch');
-  assert(fs.existsSync(path.join(sandboxDir, '.mysync')), '.mysync directory not created');
-  assert(fs.existsSync(path.join(sandboxDir, '.mysync', 'HEAD')), 'HEAD file not created');
-  assert(fs.existsSync(path.join(sandboxDir, '.mysync', 'index')), 'index file not created');
+  assert(initOutput.includes('Initialized empty gdif repository'), 'Init output mismatch');
+  assert(fs.existsSync(path.join(sandboxDir, '.gdif')), '.gdif directory not created');
+  assert(fs.existsSync(path.join(sandboxDir, '.gdif', 'HEAD')), 'HEAD file not created');
+  assert(fs.existsSync(path.join(sandboxDir, '.gdif', 'index')), 'index file not created');
 
   // 2. Test status on empty repo
-  console.log('2. Testing "mysync status" on empty repository...');
+  console.log('2. Testing "gdif status" on empty repository...');
   const statusEmpty = runCli(['status']);
   assert(statusEmpty.includes('On branch main'), 'Should be on main branch');
   assert(statusEmpty.includes('No commits yet'), 'Should show no commits');
 
   // 3. Test ignore and file creation
   console.log('3. Testing ignore rules and untracked file detection...');
-  fs.writeFileSync(path.join(sandboxDir, '.mysyncignore'), 'ignored.txt\nlogs/\n', 'utf8');
+  fs.writeFileSync(path.join(sandboxDir, '.gdifignore'), 'ignored.txt\nlogs/\n', 'utf8');
   fs.writeFileSync(path.join(sandboxDir, 'ignored.txt'), 'secret\n', 'utf8');
   fs.mkdirSync(path.join(sandboxDir, 'logs'), { recursive: true });
   fs.writeFileSync(path.join(sandboxDir, 'logs', 'app.log'), 'log line\n', 'utf8');
@@ -62,20 +62,20 @@ try {
 
   const statusUntracked = runCli(['status']);
   assert(statusUntracked.includes('hello.txt'), 'hello.txt should be untracked');
-  assert(statusUntracked.includes('.mysyncignore'), '.mysyncignore should be untracked');
+  assert(statusUntracked.includes('.gdifignore'), '.gdifignore should be untracked');
   assert(!statusUntracked.includes('ignored.txt'), 'ignored.txt should be ignored');
   assert(!statusUntracked.includes('app.log'), 'logs/ should be ignored');
 
   // 4. Test add
-  console.log('4. Testing "mysync add"...');
+  console.log('4. Testing "gdif add"...');
   runCli(['add', '.']);
   const statusStaged = runCli(['status']);
   assert(statusStaged.includes('Changes to be committed:'), 'Should show changes to be committed');
   assert(statusStaged.includes('new file:   hello.txt'), 'hello.txt should be staged as new file');
-  assert(statusStaged.includes('new file:   .mysyncignore'), '.mysyncignore should be staged');
+  assert(statusStaged.includes('new file:   .gdifignore'), '.gdifignore should be staged');
 
   // 5. Test commit
-  console.log('5. Testing "mysync commit"...');
+  console.log('5. Testing "gdif commit"...');
   const commitOutput = runCli(['commit', '-m', 'feat: initial commit']);
   assert(commitOutput.includes('[main'), 'Commit output should mention branch');
   assert(commitOutput.includes('feat: initial commit'), 'Commit output should contain message');
@@ -84,13 +84,13 @@ try {
   assert(statusAfterCommit.includes('nothing to commit, working tree clean'), 'Working tree should be clean');
 
   // 6. Test file modification and diff
-  console.log('6. Testing file changes and "mysync diff"...');
-  fs.writeFileSync(path.join(sandboxDir, 'hello.txt'), 'Hello, World!\nWelcome to mysync!\n', 'utf8');
+  console.log('6. Testing file changes and "gdif diff"...');
+  fs.writeFileSync(path.join(sandboxDir, 'hello.txt'), 'Hello, World!\nWelcome to gdif!\n', 'utf8');
   const diffOutput = runCli(['diff']);
-  assert(diffOutput.includes('+Welcome to mysync!'), 'Diff should show added line');
+  assert(diffOutput.includes('+Welcome to gdif!'), 'Diff should show added line');
 
   // 7. Test restore
-  console.log('7. Testing "mysync restore"...');
+  console.log('7. Testing "gdif restore"...');
   runCli(['restore', 'hello.txt']);
   const restoredContent = fs.readFileSync(path.join(sandboxDir, 'hello.txt'), 'utf8');
   assert.strictEqual(restoredContent, 'Hello, World!\n', 'File content should be restored');
@@ -102,7 +102,7 @@ try {
   runCli(['commit', '-m', 'chore: update greeting']);
 
   // 9. Test branching and checkout
-  console.log('9. Testing "mysync branch" and "mysync checkout"...');
+  console.log('9. Testing "gdif branch" and "gdif checkout"...');
   runCli(['branch', 'feature-alpha']);
   const branchesList = runCli(['branch']);
   assert(branchesList.includes('* main'), 'main should be current branch');
@@ -127,7 +127,7 @@ try {
   assert(fs.existsSync(path.join(sandboxDir, 'feature.txt')), 'feature.txt should be restored on feature-alpha');
 
   // 10. Test log
-  console.log('10. Testing "mysync log"...');
+  console.log('10. Testing "gdif log"...');
   const fullLog = runCli(['log']);
   assert(fullLog.includes('feat: add feature alpha file'), 'Log should show feature commit');
   assert(fullLog.includes('chore: update greeting'), 'Log should show second commit');
