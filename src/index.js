@@ -13,3 +13,6 @@ export * from './sync.js';
 export * from './auto.js';
 export * from './watch.js';
 export * from './discovery.js';
+export * from './hub.js';
+export * from './invite.js';
+export * from './global.js';

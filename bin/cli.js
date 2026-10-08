@@ -26,12 +26,15 @@ import {
   pull,
   push,
   join,
+  publish,
+  runHub,
+  setDefaultHub,
+  getDefaultHub,
+  buildInvite,
   scanNearby,
   syncAll,
   snapshot,
   watch,
-  getOrCreateToken,
-  lanAddresses,
   getConfig,
   writeConfig,
 } from '../src/index.js';
@@ -45,15 +48,73 @@ program
 
 // join
 program
-  .command('join <url> [directory]')
-  .usage('<url|auto> [directory] --token <token>')
-  .description('Join a synced folder, merging any files already here with the peer files')
-  .requiredOption('-t, --token <token>', 'Access token printed by the serving device')
+  .command('join <target> [directory]')
+  .usage('<invite-code | workspace-name | auto | url> [directory]')
+  .description('Join a synced workspace, merging any files already here with the others')
+  .option('-t, --token <token>', 'Workspace token (not needed with an invite code)')
   .option('--device <name>', 'Name for this device (defaults to hostname)')
-  .action(async (url, directory, options) => {
+  .action(async (target, directory, options) => {
     try {
-      await join(url, directory, { token: options.token, device: options.device });
+      await join(target, directory, { token: options.token, device: options.device });
       console.log('Run `mysync watch` in that folder to keep it in sync automatically.');
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// hub
+const hubCmd = program
+  .command('hub')
+  .description('Run or choose a hub: an always-on meeting point so devices can sync over the internet');
+
+hubCmd
+  .command('serve')
+  .description('Run a hub that stores named workspaces (put it behind HTTPS when exposing it)')
+  .option('-p, --port <number>', 'Port to listen on', 8080)
+  .option('-H, --host <address>', 'Host address to bind to', '0.0.0.0')
+  .option('-d, --dir <path>', 'Where to store workspaces', './mysync-hub')
+  .option('--secret <secret>', 'Required to create workspaces (recommended)', process.env.MYSYNC_HUB_SECRET)
+  .action((options) => {
+    runHub({ dir: options.dir, port: parseInt(options.port, 10), host: options.host, secret: options.secret || null });
+  });
+
+hubCmd
+  .command('set <url>')
+  .description('Use this hub for publish / join-by-name on this machine')
+  .option('--secret <secret>', 'Hub secret, if the hub requires one to create workspaces')
+  .action((url, options) => {
+    if (!/^https?:\/\//.test(url)) {
+      console.error('fatal: hub URL must start with http:// or https://');
+      process.exit(1);
+    }
+    setDefaultHub(url, options.secret);
+    console.log(`Default hub set to ${url}`);
+    if (url.startsWith('http://') && !/^http:\/\/(localhost|127\.|10\.|192\.168\.)/.test(url)) {
+      console.log('warning: plain http sends your workspace token over the internet in the clear. Prefer https://.');
+    }
+  });
+
+hubCmd
+  .command('show')
+  .description('Show the default hub')
+  .action(() => {
+    const hub = getDefaultHub();
+    console.log(hub ? hub.url : 'No hub set. Use `mysync hub set <url>`.');
+  });
+
+// publish
+program
+  .command('publish [name]')
+  .description('Put this folder on your hub under a name so any device can join it')
+  .option('-p, --port <number>', 'Port the watcher listens on (for LAN addresses in the invite)', 3000)
+  .action(async (name, options) => {
+    try {
+      const root = requireRepoRoot();
+      const code = await publish(root, name, { port: parseInt(options.port, 10) });
+      console.log('\nOn any other device:');
+      console.log(`  mysync join ${code}`);
+      console.log('The invite code contains the workspace token. Treat it like a password.');
     } catch (err) {
       console.error(err.message);
       process.exit(1);
@@ -130,7 +191,7 @@ program
 // invite
 program
   .command('invite')
-  .description('Print the command another device runs to join this folder')
+  .description('Print an invite code other devices can use with `mysync join`')
   .option('-p, --port <number>', 'Port the watcher listens on', 3000)
   .option('--device <name>', 'Name this device (shown in commit history)')
   .action((options) => {
@@ -141,12 +202,7 @@ program
         config.device = options.device;
         writeConfig(root, config);
       }
-      const token = getOrCreateToken(root);
-      const ips = lanAddresses();
-      if (ips.length === 0) ips.push('<this-device-ip>');
-      for (const ip of ips) {
-        console.log(`mysync join http://${ip}:${options.port} --token ${token}`);
-      }
+      console.log(`mysync join ${buildInvite(root, parseInt(options.port, 10))}`);
     } catch (err) {
       console.error(err.message);
       process.exit(1);

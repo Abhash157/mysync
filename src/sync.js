@@ -11,6 +11,7 @@ import {
   getConfig,
   writeConfig,
   getOrCreateFolderId,
+  getOrCreateToken,
 } from './repo.js';
 import { checkout } from './branch.js';
 import { readObject, readCommit, readTree, getObjectPath } from './objects.js';
@@ -21,7 +22,11 @@ import {
   pushRemoteObjects,
   updateRemoteRef,
   verifyPeer,
+  createHubWorkspace,
 } from './client.js';
+import { getDefaultHub } from './global.js';
+import { isInviteCode, decodeInvite, hubWorkspaceUrl, buildInvite } from './invite.js';
+import { isValidWorkspaceName } from './hub.js';
 import { scanNearby } from './discovery.js';
 import { snapshot, integrate } from './auto.js';
 
@@ -185,25 +190,57 @@ export async function findNearby(token) {
 }
 
 /**
- * Joins an existing mysync network from any folder (new, or already holding files).
- * Files already here are merged with the peer's, never overwritten. Pass url
- * 'auto' to find the device on the local network that accepts `token`.
+ * Works out where to connect from whatever the user typed.
+ * @returns {Promise<{ candidates: string[], token: string, hub: { url: string, workspace: string }|null }>}
  */
-export async function join(url, targetDir, { token = null, device = null } = {}) {
-  if (!token) throw new Error('fatal: --token is required to join');
+async function resolveJoinTarget(target, token) {
+  if (isInviteCode(target)) {
+    const invite = decodeInvite(target);
+    const hub = invite.h && invite.w ? { url: invite.h, workspace: invite.w } : null;
+    const candidates = [...(invite.l || [])];
+    if (hub) candidates.push(hubWorkspaceUrl(hub.url, hub.workspace));
+    return { candidates, token: invite.t, hub };
+  }
 
-  if (url === 'auto') {
+  if (!token) throw new Error('fatal: --token is required unless you join with an invite code');
+
+  if (target === 'auto') {
     console.log('Looking for devices on the local network...');
     const nearby = await findNearby(token);
     if (nearby.length === 0) {
-      throw new Error('fatal: no nearby device accepted that token. Is `mysync watch` running there? Otherwise pass its URL.');
+      throw new Error('fatal: no nearby device accepted that token. Is `mysync watch` running there? Otherwise use an invite code or workspace name.');
     }
-    url = nearby[0].url;
-    console.log(`Found ${nearby[0].device} at ${url}`);
+    console.log(`Found ${nearby[0].device} at ${nearby[0].url}`);
+    return { candidates: [nearby[0].url], token, hub: null };
   }
 
-  const info = await verifyPeer(url, token, { timeout: 5000 });
-  if (!info) throw new Error(`fatal: could not reach ${url} or its token does not match`);
+  if (/^https?:\/\//.test(target)) return { candidates: [target], token, hub: null };
+
+  // A bare workspace name, looked up on the default hub.
+  const hub = getDefaultHub();
+  if (!hub) throw new Error(`fatal: '${target}' is not a URL or invite code, and no hub is configured (mysync hub set <url>)`);
+  return { candidates: [hubWorkspaceUrl(hub.url, target)], token, hub: { url: hub.url, workspace: target } };
+}
+
+/**
+ * Joins an existing mysync network from any folder (new, or already holding files).
+ * `target` can be an invite code, a workspace name on your hub, 'auto' (find on
+ * the LAN) or a URL. Files already here are merged with the peer's, never overwritten.
+ */
+export async function join(target, targetDir, { token = null, device = null } = {}) {
+  const resolved = await resolveJoinTarget(target, token);
+  token = resolved.token;
+
+  let url = null;
+  let info = null;
+  for (const candidate of resolved.candidates) {
+    info = await verifyPeer(candidate, token, { timeout: 4000 });
+    if (info) {
+      url = candidate;
+      break;
+    }
+  }
+  if (!info) throw new Error('fatal: could not reach the workspace, or its token does not match');
 
   const repoRoot = path.resolve(process.cwd(), targetDir || '.');
   fs.mkdirSync(repoRoot, { recursive: true });
@@ -214,13 +251,48 @@ export async function join(url, targetDir, { token = null, device = null } = {})
   config.token = token;
   config.folderId = info.folderId;
   if (device) config.device = device;
+  if (resolved.hub) config.hub = resolved.hub;
   writeConfig(repoRoot, config);
 
-  const name = peerName(info.device, info.deviceId);
+  const name = info.deviceId.startsWith('hub-') ? 'hub' : peerName(info.device, info.deviceId);
   setRemote(repoRoot, name, url, token);
+  if (resolved.hub && name !== 'hub') {
+    setRemote(repoRoot, 'hub', hubWorkspaceUrl(resolved.hub.url, resolved.hub.workspace), token);
+  }
+
   const result = await syncPeer(repoRoot, name);
   console.log(`Joined ${url} in ${repoRoot}`);
   return result;
+}
+
+/**
+ * Puts this workspace on your hub under a name, so other devices can join from anywhere.
+ * @returns {Promise<string>} invite code
+ */
+export async function publish(repoRoot, name, { port = 3000 } = {}) {
+  const hub = getDefaultHub();
+  if (!hub) throw new Error('fatal: no hub configured. Run `mysync hub set <url>` first.');
+
+  name = (name || path.basename(repoRoot)).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!isValidWorkspaceName(name)) throw new Error(`fatal: '${name}' is not a valid workspace name (2-63 chars: a-z 0-9 . _ -)`);
+
+  const token = getOrCreateToken(repoRoot);
+  const folderId = getOrCreateFolderId(repoRoot);
+  const wsUrl = hubWorkspaceUrl(hub.url, name);
+
+  const outcome = await createHubWorkspace(hub.url, name, { token, folderId, secret: hub.secret });
+  if (outcome === 'exists' && !(await verifyPeer(wsUrl, token))) {
+    throw new Error(`fatal: the name '${name}' is already taken on this hub by another workspace. Pick another with \`mysync publish <name>\`.`);
+  }
+
+  const config = getConfig(repoRoot);
+  config.hub = { url: hub.url, workspace: name };
+  writeConfig(repoRoot, config);
+  setRemote(repoRoot, 'hub', wsUrl, token);
+
+  await syncPeer(repoRoot, 'hub');
+  console.log(outcome === 'created' ? `Published as '${name}' on ${hub.url}` : `Re-linked to '${name}' on ${hub.url}`);
+  return buildInvite(repoRoot, port);
 }
 
 /**

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node bin/cli.js",
-    "test": "node test/vcs.test.js && node test/remote.test.js && node test/auto.test.js && node test/discovery.test.js"
+    "test": "node test/vcs.test.js && node test/remote.test.js && node test/auto.test.js && node test/discovery.test.js && node test/hub.test.js"
   },
   "dependencies": {
     "commander": "^11.0.0",

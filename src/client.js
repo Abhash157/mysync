@@ -18,7 +18,7 @@ async function fetchJson(remote, route, method = 'GET', body = null) {
     options.body = JSON.stringify(body);
   }
 
-  const res = await fetch(new URL(route, url).href, options);
+  const res = await fetch(url.replace(/\/+$/, '') + route, options);
   let data = {};
   try {
     data = await res.json();
@@ -95,7 +95,7 @@ export function makeProof(token, nonce, folderId) {
 export async function verifyPeer(url, token, { timeout = 3000 } = {}) {
   try {
     const nonce = crypto.randomBytes(16).toString('hex');
-    const res = await fetch(new URL(`/whoami?nonce=${nonce}`, url).href, { signal: AbortSignal.timeout(timeout) });
+    const res = await fetch(`${url.replace(/\/+$/, '')}/whoami?nonce=${nonce}`, { signal: AbortSignal.timeout(timeout) });
     if (!res.ok) return null;
     const info = await res.json();
     const expected = Buffer.from(makeProof(token, nonce, info.folderId));
@@ -105,4 +105,27 @@ export async function verifyPeer(url, token, { timeout = 3000 } = {}) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Creates a workspace on a hub. Resolves 'created' or 'exists' (409).
+ * @param {string} hubUrl
+ * @param {string} name
+ * @param {{ token: string, folderId: string, secret?: string|null }} options
+ */
+export async function createHubWorkspace(hubUrl, name, { token, folderId, secret = null }) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (secret) headers['X-Hub-Secret'] = secret;
+  const res = await fetch(`${hubUrl.replace(/\/+$/, '')}/w/${name}/create`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ token, folderId }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (res.status === 409) return 'exists';
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `hub returned HTTP ${res.status}`);
+  }
+  return 'created';
 }

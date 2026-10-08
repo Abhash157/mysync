@@ -6,15 +6,16 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { listBranches } from './branch.js';
 import { getOrCreateToken, getOrCreateFolderId, getOrCreateDeviceId } from './repo.js';
+import { buildInvite } from './invite.js';
 import { getObjectPath, hashObject } from './objects.js';
-import { receive, getDeviceName } from './auto.js';
+import { receive, receiveBare, getDeviceName } from './auto.js';
 import { makeProof } from './client.js';
 
 const HASH_RE = /^[0-9a-f]{40}$/;
 const BRANCH_RE = /^[a-zA-Z0-9._-]+$/;
 const MAX_BODY = 256 * 1024 * 1024;
 
-function tokenMatches(provided, expected) {
+export function tokenMatches(provided, expected) {
   const a = crypto.createHash('sha256').update(provided).digest();
   const b = crypto.createHash('sha256').update(expected).digest();
   return crypto.timingSafeEqual(a, b);
@@ -32,33 +33,24 @@ export function lanAddresses() {
 }
 
 /**
- * Starts an HTTP server to serve the repository. Every request must carry the
- * repo's token. Ref updates for the checked-out branch only fast-forward and
- * update the working tree, so peers can push into a live folder safely.
- * @param {string} repoRoot
- * @param {number} port
- * @param {string} host
- * @param {{ onChange?: (info: { branch: string, hash: string }) => void, quiet?: boolean }} [options]
- * @returns {http.Server}
+ * Handles one sync-protocol request for a repository.
+ * `bare` repositories (hubs) have no working tree: ref updates only fast-forward the ref.
  */
-export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet = false } = {}) {
-  const token = getOrCreateToken(repoRoot);
-
-  const server = http.createServer((req, res) => {
+export function handleSyncRequest(req, res, url, { repoRoot, token, bare = false, onChange }) {
     const sendJson = (status, data) => {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(data));
     };
 
     // GET /whoami?nonce=... -> proves we hold the token without revealing it
-    if (req.method === 'GET' && req.url.startsWith('/whoami?')) {
-      const nonce = new URL(req.url, 'http://x').searchParams.get('nonce') || '';
+    if (req.method === 'GET' && url.startsWith('/whoami?')) {
+      const nonce = new URL(url, 'http://x').searchParams.get('nonce') || '';
       if (!/^[0-9a-f]{8,64}$/.test(nonce)) return sendJson(400, { error: 'bad nonce' });
       const folderId = getOrCreateFolderId(repoRoot);
       return sendJson(200, {
         folderId,
-        device: getDeviceName(repoRoot),
-        deviceId: getOrCreateDeviceId(repoRoot),
+        device: bare ? 'hub' : getDeviceName(repoRoot),
+        deviceId: bare ? `hub-${folderId}` : getOrCreateDeviceId(repoRoot),
         proof: makeProof(token, nonce, folderId),
       });
     }
@@ -89,7 +81,7 @@ export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet
       });
 
     // GET /info/refs -> { "main": "hash1", "feature": "hash2" }
-    if (req.method === 'GET' && req.url === '/info/refs') {
+    if (req.method === 'GET' && url === '/info/refs') {
       try {
         const refs = {};
         for (const b of listBranches(repoRoot)) {
@@ -102,7 +94,7 @@ export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet
     }
 
     // POST /objects/missing -> { hashes } -> { missing: hashes we do not have }
-    if (req.method === 'POST' && req.url === '/objects/missing') {
+    if (req.method === 'POST' && url === '/objects/missing') {
       return parseBody().then(({ hashes }) => {
         const missing = hashes.filter((h) => HASH_RE.test(h) && !fs.existsSync(getObjectPath(repoRoot, h)));
         sendJson(200, { missing });
@@ -110,7 +102,7 @@ export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet
     }
 
     // POST /objects/fetch -> { hashes: string[] } -> { objects: { hash: base64 } }
-    if (req.method === 'POST' && req.url === '/objects/fetch') {
+    if (req.method === 'POST' && url === '/objects/fetch') {
       return parseBody().then(({ hashes }) => {
         const objects = {};
         for (const hash of hashes) {
@@ -125,7 +117,7 @@ export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet
     }
 
     // POST /objects/push -> { objects: { hash: base64 } }
-    if (req.method === 'POST' && req.url === '/objects/push') {
+    if (req.method === 'POST' && url === '/objects/push') {
       return parseBody().then(({ objects }) => {
         for (const [hash, base64Data] of Object.entries(objects)) {
           if (!HASH_RE.test(hash)) throw new Error(`invalid object name ${hash}`);
@@ -148,8 +140,8 @@ export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet
     }
 
     // POST /refs/heads/:branch -> { commitHash: string }
-    if (req.method === 'POST' && req.url.startsWith('/refs/heads/')) {
-      const branchName = req.url.slice('/refs/heads/'.length);
+    if (req.method === 'POST' && url.startsWith('/refs/heads/')) {
+      const branchName = url.slice('/refs/heads/'.length);
       return parseBody().then(async ({ commitHash }) => {
         if (!BRANCH_RE.test(branchName) || !HASH_RE.test(commitHash || '')) {
           return sendJson(400, { error: 'Invalid branch or commitHash' });
@@ -157,7 +149,9 @@ export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet
         if (!fs.existsSync(getObjectPath(repoRoot, commitHash))) {
           return sendJson(400, { error: 'commit objects not uploaded yet' });
         }
-        const outcome = await receive(repoRoot, branchName, commitHash);
+        const outcome = bare
+          ? await receiveBare(repoRoot, branchName, commitHash)
+          : await receive(repoRoot, branchName, commitHash);
         if (outcome === 'diverged') {
           return sendJson(409, { error: 'remote has diverged; pull first' });
         }
@@ -167,15 +161,31 @@ export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet
     }
 
     sendJson(404, { error: 'Not found' });
+}
+
+/**
+ * Starts an HTTP server to serve the repository. Every request must carry the
+ * repo's token. Ref updates for the checked-out branch only fast-forward and
+ * update the working tree, so peers can push into a live folder safely.
+ * @param {string} repoRoot
+ * @param {number} port
+ * @param {string} host
+ * @param {{ onChange?: (info: { branch: string, hash: string }) => void, quiet?: boolean }} [options]
+ * @returns {http.Server}
+ */
+export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet = false } = {}) {
+  const token = getOrCreateToken(repoRoot);
+
+  const server = http.createServer((req, res) => {
+    handleSyncRequest(req, res, req.url, { repoRoot, token, bare: false, onChange });
   });
 
   server.listen(port, host, () => {
     if (quiet) return;
     console.log(`mysync server listening on ${host}:${port}`);
     console.log(`Token: ${token}`);
-    for (const ip of lanAddresses()) {
-      console.log(`To join: mysync join http://${ip}:${port} --token ${token}`);
-    }
+    console.log(`Invite code (same network or internet): ${buildInvite(repoRoot, port)}`);
+    console.log('On another device: mysync join <invite code>   (on the same network: mysync join auto --token <token>)');
   });
 
   return server;

@@ -80,6 +80,36 @@ No IP needed on the same network: `mysync join auto --token <token>` finds the d
 
 **Security:** every request needs the repo's token (in `.mysync/config.json`). Traffic is plain HTTP, so use it on a trusted network or over a VPN like Tailscale/WireGuard.
 
+## Sync over the internet (hub + workspace names)
+
+LAN discovery only works on one network. For devices anywhere, run a **hub**: a small always-reachable server that holds named workspaces. Devices connect to it outbound, so phones and laptops behind NAT work without port forwarding.
+
+**Once, on something reachable (VPS, home PC with a tunnel/port-forward):**
+```bash
+mysync hub serve --port 8080 --dir ./mysync-hub --secret <hub-secret>
+```
+Put it behind HTTPS (Caddy, nginx, Cloudflare Tunnel...). Over plain http the workspace token travels unencrypted.
+
+**On each of your devices, once:**
+```bash
+mysync hub set https://hub.example.com --secret <hub-secret>
+```
+
+**Publish a folder under a name:**
+```bash
+cd ~/notes && mysync init && mysync publish notes     # prints an invite code
+mysync watch
+```
+
+**Join from any device, anywhere:**
+```bash
+mysync join <invite-code> [folder]                    # one string, nothing else to type
+mysync join notes --token <token>                     # or just the workspace name
+mysync watch
+```
+
+An invite code carries the hub, the name, the token and the LAN addresses. Join tries the LAN first and falls back to the hub, then keeps both links, so devices sync directly at home and through the hub when apart. Treat the code like a password. `mysync invite` reprints it. The hub stores only bare copies (no working files), and refuses names that are already taken by someone else.
+
 ## Remote Syncing (manual, git-style)
 
 The classic commands still work. `serve` requires a token, `pull` now merges instead of only fast-forwarding, and `push` uploads only objects the peer is missing.

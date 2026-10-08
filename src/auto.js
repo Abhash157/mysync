@@ -432,3 +432,19 @@ export function receive(repoRoot, branch, hash) {
     return 'diverged';
   });
 }
+
+/**
+ * Hub side of a push: a hub has no working tree, so it only moves the ref
+ * when the new commit descends from the current one.
+ * @returns {Promise<'ok'|'diverged'>}
+ */
+export function receiveBare(repoRoot, branch, hash) {
+  return withLock(repoRoot, () => {
+    const refPath = path.join(repoRoot, GDIF_DIR, 'refs', 'heads', branch);
+    const current = fs.existsSync(refPath) ? fs.readFileSync(refPath, 'utf8').trim() : null;
+    if (current && (current === hash || isAncestor(repoRoot, hash, current))) return 'ok';
+    if (current && !isAncestor(repoRoot, current, hash)) return 'diverged';
+    updateBranchRef(repoRoot, branch, hash);
+    return 'ok';
+  });
+}
