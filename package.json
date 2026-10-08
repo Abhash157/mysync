@@ -1,6 +1,6 @@
 {
   "name": "@abhashlimbu/mysync",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lightweight, Git-like Version Control System (VCS) CLI",
   "main": "src/index.js",
   "type": "module",
