@@ -43,27 +43,49 @@ npm link
 | `serve` | Start HTTP server for remote sync | `mysync serve --port 3000` |
 | `clone <url> [dir]` | Clone remote repository | `mysync clone http://device-ip:3000` |
 | `remote add <name> <url>`| Add remote repo | `mysync remote add origin http://device-ip:3000` |
-| `pull <remote> <branch>` | Fetch and integrate remote changes | `mysync pull origin main` |
-| `push <remote> <branch>` | Push local changes to remote | `mysync push origin main` |
+| `pull <remote> [branch]` | Fetch and merge remote changes | `mysync pull origin` |
+| `push <remote> [branch]` | Push local changes to remote | `mysync push origin` |
+| `watch` | Continuous automatic sync with all peers | `mysync watch` |
+| `join <url> [dir]` | Join a synced folder | `mysync join http://ip:3000 --token T` |
+| `sync` | One automatic sync round | `mysync sync` |
+| `invite` | Print the join command for this folder | `mysync invite` |
 
-## Remote Syncing (including Android)
+## Seamless Sync (no add / commit / push)
 
-You can sync your repository across devices over your local network using the built-in HTTP server.
+Run one watcher per device. Edits are saved automatically, merged with the other devices, and pushed out, with nothing to stage or commit.
 
-**On the Host Device (e.g., your Android phone using Termux or another PC):**
+**Device 1 (any folder you want to share):**
 ```bash
-mysync serve --port 3000
+mysync init
+mysync watch            # prints a ready-to-paste "join" command with a secret token
 ```
 
-**On the Client Device:**
+**Device 2, 3, ... (same command on each):**
 ```bash
-# Clone the repository
-mysync clone http://<host-device-ip>:3000 my-project
+mysync join http://<device-1-ip>:3000 --token <token> [folder]
+mysync watch
+```
 
-# Or add a remote to an existing repo
-mysync remote add origin http://<host-device-ip>:3000
-mysync pull origin main
-mysync push origin main
+`join` works on an empty folder or one that already has files. Existing files are merged in, never overwritten. After that, saving a file on any device makes it appear on the others within a few seconds, deletes included.
+
+- `mysync sync` does a single round by hand (useful for cron or if you don't want a daemon).
+- `mysync invite` reprints the join command; `--device <name>` names this device in history.
+- Every device can reach every peer it has a remote for. A phone behind NAT can join a PC and still get live updates, because it polls and pushes outward.
+
+**If two devices edit the same file at once**, nothing is lost. The newest edit keeps the filename, and the other version is saved beside it as `name.conflict-<hash>.ext`. Both devices make the same choice, so they converge. If one deletes a file that another edited, the edit wins.
+
+**Security:** every request needs the repo's token (in `.mysync/config.json`). Traffic is plain HTTP, so use it on a trusted network or over a VPN like Tailscale/WireGuard.
+
+## Remote Syncing (manual, git-style)
+
+The classic commands still work. `serve` requires a token, `pull` now merges instead of only fast-forwarding, and `push` uploads only objects the peer is missing.
+
+```bash
+mysync serve --port 3000                       # prints the token
+mysync clone http://<ip>:3000 my-project --token <token>
+mysync remote add origin http://<ip>:3000 --token <token>
+mysync pull origin
+mysync push origin
 ```
 
 ## Running Tests

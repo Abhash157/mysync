@@ -151,19 +151,21 @@ export function readTree(repoRoot, treeHash) {
  * @param {{
  *   treeHash: string,
  *   parentHash?: string|null,
+ *   parentHashes?: string[],
  *   author: { name: string, email: string, timestamp?: number },
  *   message: string
  * }} options
  * @returns {string} Commit hash
  */
-export function writeCommit(repoRoot, { treeHash, parentHash = null, author, message }) {
+export function writeCommit(repoRoot, { treeHash, parentHash = null, parentHashes = null, author, message }) {
+  const parents = parentHashes || (parentHash ? [parentHash] : []);
   const timestamp = author.timestamp || Math.floor(Date.now() / 1000);
   const authorLine = `author ${author.name} <${author.email}> ${timestamp}`;
   const committerLine = `committer ${author.name} <${author.email}> ${timestamp}`;
 
   const lines = [`tree ${treeHash}`];
-  if (parentHash) {
-    lines.push(`parent ${parentHash}`);
+  for (const parent of parents) {
+    lines.push(`parent ${parent}`);
   }
   lines.push(authorLine);
   lines.push(committerLine);
@@ -182,6 +184,7 @@ export function writeCommit(repoRoot, { treeHash, parentHash = null, author, mes
  * @returns {{
  *   treeHash: string,
  *   parentHash: string|null,
+ *   parentHashes: string[],
  *   author: { name: string, email: string, timestamp: number },
  *   message: string
  * }}
@@ -198,14 +201,14 @@ export function readCommit(repoRoot, commitHash) {
   const messagePart = headerEnd !== -1 ? text.slice(headerEnd + 2) : '';
 
   let treeHash = null;
-  let parentHash = null;
+  const parentHashes = [];
   let author = { name: 'Unknown', email: 'unknown@mysync', timestamp: 0 };
 
   for (const line of headerPart.split('\n')) {
     if (line.startsWith('tree ')) {
       treeHash = line.slice(5).trim();
     } else if (line.startsWith('parent ')) {
-      parentHash = line.slice(7).trim();
+      parentHashes.push(line.slice(7).trim());
     } else if (line.startsWith('author ')) {
       const match = line.slice(7).match(/^(.*) <(.*)> (\d+)$/);
       if (match) {
@@ -220,7 +223,8 @@ export function readCommit(repoRoot, commitHash) {
 
   return {
     treeHash,
-    parentHash,
+    parentHash: parentHashes[0] || null,
+    parentHashes,
     author,
     message: messagePart.trim(),
   };

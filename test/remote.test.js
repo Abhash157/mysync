@@ -60,7 +60,10 @@ async function runTests() {
 
     // 3. Clone to Repo B
     console.log('3. Cloning Repo A to Repo B...');
-    runCli(['clone', 'http://127.0.0.1:3030', 'repoB'], sandboxDir);
+    const token = JSON.parse(fs.readFileSync(path.join(repoA, '.mysync', 'config.json'), 'utf8')).token;
+    assert(token, 'server should generate a token');
+    assert.throws(() => runCli(['clone', 'http://127.0.0.1:3030', 'noauth'], sandboxDir), 'clone without token must fail');
+    runCli(['clone', 'http://127.0.0.1:3030', 'repoB', '--token', token], sandboxDir);
     
     assert(fs.existsSync(path.join(repoB, 'hello.txt')), 'hello.txt should be cloned');
     const content = fs.readFileSync(path.join(repoB, 'hello.txt'), 'utf8');

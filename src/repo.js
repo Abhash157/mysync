@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 export const GDIF_DIR = '.mysync';
 
@@ -180,11 +181,55 @@ export function writeConfig(repoRoot, config) {
  * @param {string} remoteName
  * @param {string} url
  */
-export function setRemote(repoRoot, remoteName, url) {
+export function setRemote(repoRoot, remoteName, url, token = null) {
   const config = getConfig(repoRoot);
   if (!config.remotes) config.remotes = {};
   config.remotes[remoteName] = url;
+  if (token) {
+    if (!config.remoteTokens) config.remoteTokens = {};
+    config.remoteTokens[remoteName] = token;
+  }
   writeConfig(repoRoot, config);
+}
+
+/**
+ * Gets a remote as { url, token } (token may be null).
+ * @param {string} repoRoot
+ * @param {string} remoteName
+ * @returns {{ url: string, token: string|null }|null}
+ */
+export function getPeer(repoRoot, remoteName) {
+  const config = getConfig(repoRoot);
+  const url = config.remotes?.[remoteName];
+  if (!url) return null;
+  return { url, token: config.remoteTokens?.[remoteName] || null };
+}
+
+/**
+ * Lists every configured remote as { name, url, token }.
+ * @param {string} repoRoot
+ */
+export function listPeers(repoRoot) {
+  const config = getConfig(repoRoot);
+  return Object.entries(config.remotes || {}).map(([name, url]) => ({
+    name,
+    url,
+    token: config.remoteTokens?.[name] || null,
+  }));
+}
+
+/**
+ * Returns this repo's shared secret for incoming connections, creating it on first use.
+ * @param {string} repoRoot
+ * @returns {string}
+ */
+export function getOrCreateToken(repoRoot) {
+  const config = getConfig(repoRoot);
+  if (!config.token) {
+    config.token = crypto.randomBytes(18).toString('base64url');
+    writeConfig(repoRoot, config);
+  }
+  return config.token;
 }
 
 /**

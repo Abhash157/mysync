@@ -20,21 +20,29 @@ export function getLog(repoRoot, { limit } = {}) {
     return [];
   }
 
+  // Walk every parent (merge commits have several), newest first.
   const history = [];
-  let currentHash = headInfo.commitHash;
+  const seen = new Set([headInfo.commitHash]);
+  const pending = [headInfo.commitHash];
 
-  while (currentHash) {
-    const commitData = readCommit(repoRoot, currentHash);
-    history.push({
-      hash: currentHash,
-      ...commitData,
-    });
-
-    if (limit && history.length >= limit) {
-      break;
+  while (pending.length > 0) {
+    let best = 0;
+    const commits = pending.map((hash) => ({ hash, ...readCommit(repoRoot, hash) }));
+    for (let i = 1; i < commits.length; i++) {
+      if (commits[i].author.timestamp > commits[best].author.timestamp) best = i;
     }
+    const next = commits[best];
+    pending.splice(best, 1);
+    history.push(next);
 
-    currentHash = commitData.parentHash;
+    if (limit && history.length >= limit) break;
+
+    for (const parent of next.parentHashes) {
+      if (!seen.has(parent)) {
+        seen.add(parent);
+        pending.push(parent);
+      }
+    }
   }
 
   return history;

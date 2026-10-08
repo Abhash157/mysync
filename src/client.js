@@ -1,66 +1,81 @@
+/** Remotes are either a bare URL string or { url, token }. */
+function asPeer(remote) {
+  return typeof remote === 'string' ? { url: remote, token: null } : remote;
+}
+
 /**
  * Helper to make a JSON request.
  */
-async function fetchJson(url, method = 'GET', body = null) {
-  const options = {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-  };
+async function fetchJson(remote, route, method = 'GET', body = null) {
+  const { url, token } = asPeer(remote);
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const options = { method, headers, signal: AbortSignal.timeout(60_000) };
   if (body) {
     options.body = JSON.stringify(body);
   }
 
-  const res = await fetch(url, options);
-  const data = await res.json();
+  const res = await fetch(new URL(route, url).href, options);
+  let data = {};
+  try {
+    data = await res.json();
+  } catch { /* non-JSON error body */ }
   if (!res.ok) {
-    throw new Error(data.error || `HTTP error ${res.status}`);
+    const err = new Error(data.error || `HTTP error ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
   return data;
 }
 
 /**
  * Fetches remote refs.
- * @param {string} remoteUrl
  * @returns {Promise<Record<string, string>>} Map of branch name to commit hash
  */
-export async function fetchRemoteRefs(remoteUrl) {
-  const url = new URL('/info/refs', remoteUrl).href;
-  return fetchJson(url);
+export async function fetchRemoteRefs(remote) {
+  return fetchJson(remote, '/info/refs');
 }
 
 /**
  * Fetches specific objects from remote.
- * @param {string} remoteUrl
  * @param {string[]} hashes
  * @returns {Promise<Record<string, string>>} Map of hash to base64 data
  */
-export async function fetchRemoteObjects(remoteUrl, hashes) {
+export async function fetchRemoteObjects(remote, hashes) {
   if (hashes.length === 0) return {};
-  const url = new URL('/objects/fetch', remoteUrl).href;
-  const res = await fetchJson(url, 'POST', { hashes });
+  const res = await fetchJson(remote, '/objects/fetch', 'POST', { hashes });
   return res.objects;
 }
 
 /**
- * Pushes objects to remote.
- * @param {string} remoteUrl
- * @param {Record<string, string>} objects Map of hash to base64 data
- * @returns {Promise<void>}
+ * Asks the remote which of the given object hashes it does not have yet.
+ * @param {string[]} hashes
+ * @returns {Promise<string[]>}
  */
-export async function pushRemoteObjects(remoteUrl, objects) {
-  if (Object.keys(objects).length === 0) return;
-  const url = new URL('/objects/push', remoteUrl).href;
-  await fetchJson(url, 'POST', { objects });
+export async function fetchMissingOnRemote(remote, hashes) {
+  const missing = [];
+  for (let i = 0; i < hashes.length; i += 2000) {
+    const res = await fetchJson(remote, '/objects/missing', 'POST', { hashes: hashes.slice(i, i + 2000) });
+    missing.push(...res.missing);
+  }
+  return missing;
 }
 
 /**
- * Updates remote branch ref.
- * @param {string} remoteUrl
- * @param {string} branchName
- * @param {string} commitHash
+ * Pushes objects to remote.
+ * @param {Record<string, string>} objects Map of hash to base64 data
  * @returns {Promise<void>}
  */
-export async function updateRemoteRef(remoteUrl, branchName, commitHash) {
-  const url = new URL(`/refs/heads/${branchName}`, remoteUrl).href;
-  await fetchJson(url, 'POST', { commitHash });
+export async function pushRemoteObjects(remote, objects) {
+  if (Object.keys(objects).length === 0) return;
+  await fetchJson(remote, '/objects/push', 'POST', { objects });
+}
+
+/**
+ * Updates remote branch ref. Rejects with err.status === 409 if the remote diverged.
+ * @returns {Promise<void>}
+ */
+export async function updateRemoteRef(remote, branchName, commitHash) {
+  await fetchJson(remote, `/refs/heads/${branchName}`, 'POST', { commitHash });
 }

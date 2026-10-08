@@ -25,6 +25,14 @@ import {
   fetch,
   pull,
   push,
+  join,
+  syncAll,
+  snapshot,
+  watch,
+  getOrCreateToken,
+  lanAddresses,
+  getConfig,
+  writeConfig,
 } from '../src/index.js';
 
 const program = new Command();
@@ -32,7 +40,104 @@ const program = new Command();
 program
   .name('mysync')
   .description('Lightweight, Git-like Version Control System (VCS) CLI')
-  .version('1.0.0');
+  .version('1.1.0');
+
+// join
+program
+  .command('join <url> [directory]')
+  .description('Join a synced folder, merging any files already here with the peer files')
+  .requiredOption('-t, --token <token>', 'Access token printed by the serving device')
+  .option('--device <name>', 'Name for this device (defaults to hostname)')
+  .action(async (url, directory, options) => {
+    try {
+      await join(url, directory, { token: options.token, device: options.device });
+      console.log('Run `mysync watch` in that folder to keep it in sync automatically.');
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// watch
+program
+  .command('watch')
+  .description('Keep this folder continuously in sync with its peers (no add/commit/push needed)')
+  .option('-p, --port <number>', 'Port to accept connections on', 3000)
+  .option('-H, --host <address>', 'Host address to bind to', '0.0.0.0')
+  .option('-i, --interval <seconds>', 'How often to check peers', 3)
+  .option('--no-serve', 'Do not accept incoming connections (only sync out to peers)')
+  .action((options) => {
+    try {
+      const root = requireRepoRoot();
+      const handle = watch(root, {
+        port: parseInt(options.port, 10),
+        host: options.host,
+        serve: options.serve,
+        interval: Math.max(1, parseFloat(options.interval)),
+      });
+      process.on('SIGINT', () => {
+        handle.stop();
+        process.exit(0);
+      });
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// sync
+program
+  .command('sync')
+  .description('One-shot: save local changes, then merge with and send to every peer')
+  .action(async () => {
+    try {
+      const root = requireRepoRoot();
+      const hash = await snapshot(root);
+      if (hash) console.log(`Saved local changes (${hash.slice(0, 7)})`);
+      const results = await syncAll(root);
+      if (results.length === 0) console.log('No peers configured. Use `mysync join` or `mysync remote add`.');
+      let failed = false;
+      for (const r of results) {
+        if (!r.ok) {
+          failed = true;
+          console.error(`${r.name}: ${r.error}`);
+          continue;
+        }
+        console.log(`${r.name}: received=${r.pulled} sent=${r.pushed ? 'yes' : 'nothing new'}`);
+        for (const file of r.conflicts) console.log(`  conflict in ${file}: both versions kept`);
+      }
+      if (failed) process.exit(1);
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+  });
+
+// invite
+program
+  .command('invite')
+  .description('Print the command another device runs to join this folder')
+  .option('-p, --port <number>', 'Port the watcher listens on', 3000)
+  .option('--device <name>', 'Name this device (shown in commit history)')
+  .action((options) => {
+    try {
+      const root = requireRepoRoot();
+      if (options.device) {
+        const config = getConfig(root);
+        config.device = options.device;
+        writeConfig(root, config);
+      }
+      const token = getOrCreateToken(root);
+      const ips = lanAddresses();
+      if (ips.length === 0) ips.push('<this-device-ip>');
+      for (const ip of ips) {
+        console.log(`mysync join http://${ip}:${options.port} --token ${token}`);
+      }
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+  });
 
 // serve
 program
@@ -56,9 +161,10 @@ program
 program
   .command('clone <url> [directory]')
   .description('Clone a repository into a new directory')
-  .action(async (url, directory) => {
+  .option('-t, --token <token>', 'Access token printed by the serving device')
+  .action(async (url, directory, options) => {
     try {
-      await clone(url, directory);
+      await clone(url, directory, { token: options.token });
     } catch (err) {
       console.error(err.message);
       process.exit(1);
@@ -73,10 +179,11 @@ const remoteCmd = program
 remoteCmd
   .command('add <name> <url>')
   .description('Add a remote named <name> for the repository at <url>')
-  .action((name, url) => {
+  .option('-t, --token <token>', 'Access token printed by the serving device')
+  .action((name, url, options) => {
     try {
       const root = requireRepoRoot();
-      setRemote(root, name, url);
+      setRemote(root, name, url, options.token);
       console.log(`Remote '${name}' added.`);
     } catch (err) {
       console.error(err.message);
@@ -100,7 +207,7 @@ program
 
 // pull
 program
-  .command('pull <remote> <branch>')
+  .command('pull <remote> [branch]')
   .description('Fetch from and integrate with another repository or a local branch')
   .action(async (remote, branch) => {
     try {
@@ -114,12 +221,12 @@ program
 
 // push
 program
-  .command('push <remote> <branch>')
+  .command('push <remote> [branch]')
   .description('Update remote refs along with associated objects')
   .action(async (remote, branch) => {
     try {
       const root = requireRepoRoot();
-      await push(root, remote, branch);
+      console.log(await push(root, remote, branch));
     } catch (err) {
       console.error(err.message);
       process.exit(1);

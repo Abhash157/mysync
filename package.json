@@ -1,6 +1,6 @@
 {
   "name": "@abhashlimbu/mysync",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Lightweight, Git-like Version Control System (VCS) CLI",
   "main": "src/index.js",
   "type": "module",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node bin/cli.js",
-    "test": "node test/vcs.test.js"
+    "test": "node test/vcs.test.js && node test/remote.test.js && node test/auto.test.js"
   },
   "dependencies": {
     "commander": "^11.0.0",
