@@ -270,3 +270,31 @@ export function getRemoteBranchRef(repoRoot, remoteName, branchName) {
   }
   return null;
 }
+
+/**
+ * Stable random id shared by every device in one synced folder (adopted on join).
+ * @param {string} repoRoot
+ * @returns {string}
+ */
+export function getOrCreateFolderId(repoRoot) {
+  const config = getConfig(repoRoot);
+  if (!config.folderId) {
+    config.folderId = crypto.randomBytes(8).toString('hex');
+    writeConfig(repoRoot, config);
+  }
+  return config.folderId;
+}
+
+/**
+ * Random id for this device in this folder.
+ * @param {string} repoRoot
+ * @returns {string}
+ */
+export function getOrCreateDeviceId(repoRoot) {
+  const config = getConfig(repoRoot);
+  if (!config.deviceId) {
+    config.deviceId = crypto.randomBytes(8).toString('hex');
+    writeConfig(repoRoot, config);
+  }
+  return config.deviceId;
+}

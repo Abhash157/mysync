@@ -5,9 +5,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { listBranches } from './branch.js';
-import { getOrCreateToken } from './repo.js';
+import { getOrCreateToken, getOrCreateFolderId, getOrCreateDeviceId } from './repo.js';
 import { getObjectPath, hashObject } from './objects.js';
-import { receive } from './auto.js';
+import { receive, getDeviceName } from './auto.js';
+import { makeProof } from './client.js';
 
 const HASH_RE = /^[0-9a-f]{40}$/;
 const BRANCH_RE = /^[a-zA-Z0-9._-]+$/;
@@ -48,6 +49,19 @@ export function serve(repoRoot, port = 3000, host = '0.0.0.0', { onChange, quiet
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(data));
     };
+
+    // GET /whoami?nonce=... -> proves we hold the token without revealing it
+    if (req.method === 'GET' && req.url.startsWith('/whoami?')) {
+      const nonce = new URL(req.url, 'http://x').searchParams.get('nonce') || '';
+      if (!/^[0-9a-f]{8,64}$/.test(nonce)) return sendJson(400, { error: 'bad nonce' });
+      const folderId = getOrCreateFolderId(repoRoot);
+      return sendJson(200, {
+        folderId,
+        device: getDeviceName(repoRoot),
+        deviceId: getOrCreateDeviceId(repoRoot),
+        proof: makeProof(token, nonce, folderId),
+      });
+    }
 
     const auth = req.headers.authorization || '';
     if (!auth.startsWith('Bearer ') || !tokenMatches(auth.slice(7), token)) {

@@ -10,6 +10,7 @@ import {
   getHeadInfo,
   getConfig,
   writeConfig,
+  getOrCreateFolderId,
 } from './repo.js';
 import { checkout } from './branch.js';
 import { readObject, readCommit, readTree, getObjectPath } from './objects.js';
@@ -19,7 +20,9 @@ import {
   fetchMissingOnRemote,
   pushRemoteObjects,
   updateRemoteRef,
+  verifyPeer,
 } from './client.js';
+import { scanNearby } from './discovery.js';
 import { snapshot, integrate } from './auto.js';
 
 const PUSH_BATCH_BYTES = 8 * 1024 * 1024;
@@ -164,23 +167,78 @@ export async function clone(url, targetDir, { token = null } = {}) {
   console.log(`Cloned into '${dirName}'.`);
 }
 
+/** Stable remote name for a device, so rediscovering it updates one entry. */
+export function peerName(device, deviceId) {
+  return `${String(device).replace(/[^a-zA-Z0-9_-]/g, '_')}-${deviceId.slice(0, 4)}`;
+}
+
+/**
+ * Finds nearby devices whose folder proves it shares `token`.
+ * @returns {Promise<Array<{ url: string, device: string, deviceId: string, folderId: string }>>}
+ */
+export async function findNearby(token) {
+  const verified = [];
+  for (const candidate of await scanNearby()) {
+    if (await verifyPeer(candidate.url, token)) verified.push(candidate);
+  }
+  return verified;
+}
+
 /**
  * Joins an existing mysync network from any folder (new, or already holding files).
- * Files already here are merged with the peer's, never overwritten.
+ * Files already here are merged with the peer's, never overwritten. Pass url
+ * 'auto' to find the device on the local network that accepts `token`.
  */
 export async function join(url, targetDir, { token = null, device = null } = {}) {
+  if (!token) throw new Error('fatal: --token is required to join');
+
+  if (url === 'auto') {
+    console.log('Looking for devices on the local network...');
+    const nearby = await findNearby(token);
+    if (nearby.length === 0) {
+      throw new Error('fatal: no nearby device accepted that token. Is `mysync watch` running there? Otherwise pass its URL.');
+    }
+    url = nearby[0].url;
+    console.log(`Found ${nearby[0].device} at ${url}`);
+  }
+
+  const info = await verifyPeer(url, token, { timeout: 5000 });
+  if (!info) throw new Error(`fatal: could not reach ${url} or its token does not match`);
+
   const repoRoot = path.resolve(process.cwd(), targetDir || '.');
   fs.mkdirSync(repoRoot, { recursive: true });
   initRepo(repoRoot);
-  setRemote(repoRoot, 'origin', url, token);
-  if (device) {
-    const config = getConfig(repoRoot);
-    config.device = device;
-    writeConfig(repoRoot, config);
-  }
-  const result = await syncPeer(repoRoot, 'origin');
+
+  // Every device in a folder shares one token and one folder id.
+  const config = getConfig(repoRoot);
+  config.token = token;
+  config.folderId = info.folderId;
+  if (device) config.device = device;
+  writeConfig(repoRoot, config);
+
+  const name = peerName(info.device, info.deviceId);
+  setRemote(repoRoot, name, url, token);
+  const result = await syncPeer(repoRoot, name);
   console.log(`Joined ${url} in ${repoRoot}`);
   return result;
+}
+
+/**
+ * Records a device found on the LAN as a peer if it proves it shares our token.
+ * @returns {Promise<boolean>} true when a peer was added or its address updated
+ */
+export async function adoptDiscoveredPeer(repoRoot, msg, address) {
+  const config = getConfig(repoRoot);
+  if (!config.token || msg.folderId !== getOrCreateFolderId(repoRoot)) return false;
+
+  const url = `http://${address}:${msg.port}`;
+  const name = peerName(msg.device, msg.deviceId);
+  if (config.remotes?.[name] === url) return false;
+
+  const info = await verifyPeer(url, config.token);
+  if (!info || info.folderId !== msg.folderId || info.deviceId !== msg.deviceId) return false;
+  setRemote(repoRoot, name, url, config.token);
+  return true;
 }
 
 /**

@@ -26,6 +26,7 @@ import {
   pull,
   push,
   join,
+  scanNearby,
   syncAll,
   snapshot,
   watch,
@@ -45,6 +46,7 @@ program
 // join
 program
   .command('join <url> [directory]')
+  .usage('<url|auto> [directory] --token <token>')
   .description('Join a synced folder, merging any files already here with the peer files')
   .requiredOption('-t, --token <token>', 'Access token printed by the serving device')
   .option('--device <name>', 'Name for this device (defaults to hostname)')
@@ -65,6 +67,7 @@ program
   .option('-p, --port <number>', 'Port to accept connections on', 3000)
   .option('-H, --host <address>', 'Host address to bind to', '0.0.0.0')
   .option('-i, --interval <seconds>', 'How often to check peers', 3)
+  .option('--no-discover', 'Do not announce or look for devices on the local network')
   .option('--no-serve', 'Do not accept incoming connections (only sync out to peers)')
   .action((options) => {
     try {
@@ -73,6 +76,7 @@ program
         port: parseInt(options.port, 10),
         host: options.host,
         serve: options.serve,
+        discover: options.discover,
         interval: Math.max(1, parseFloat(options.interval)),
       });
       process.on('SIGINT', () => {
@@ -83,6 +87,16 @@ program
       console.error(err.message);
       process.exit(1);
     }
+  });
+
+// nearby
+program
+  .command('nearby')
+  .description('List mysync devices announcing themselves on the local network')
+  .action(async () => {
+    const found = await scanNearby();
+    if (found.length === 0) console.log('No devices found. Is `mysync watch` running on another device?');
+    for (const d of found) console.log(`${d.device}	${d.url}	folder ${d.folderId}`);
   });
 
 // sync

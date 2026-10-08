@@ -12,3 +12,4 @@ export * from './client.js';
 export * from './sync.js';
 export * from './auto.js';
 export * from './watch.js';
+export * from './discovery.js';

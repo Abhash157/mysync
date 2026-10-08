@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 /** Remotes are either a bare URL string or { url, token }. */
 function asPeer(remote) {
   return typeof remote === 'string' ? { url: remote, token: null } : remote;
@@ -78,4 +80,29 @@ export async function pushRemoteObjects(remote, objects) {
  */
 export async function updateRemoteRef(remote, branchName, commitHash) {
   await fetchJson(remote, `/refs/heads/${branchName}`, 'POST', { commitHash });
+}
+
+/** HMAC proof that a server knows `token`, for the given nonce and folder. */
+export function makeProof(token, nonce, folderId) {
+  return crypto.createHmac('sha256', token).update(`${nonce}|${folderId}`).digest('hex');
+}
+
+/**
+ * Challenge-response check that `url` is a mysync server holding `token`,
+ * done without ever sending the token. Resolves null if it cannot prove it.
+ * @returns {Promise<{ folderId: string, device: string, deviceId: string }|null>}
+ */
+export async function verifyPeer(url, token, { timeout = 3000 } = {}) {
+  try {
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const res = await fetch(new URL(`/whoami?nonce=${nonce}`, url).href, { signal: AbortSignal.timeout(timeout) });
+    if (!res.ok) return null;
+    const info = await res.json();
+    const expected = Buffer.from(makeProof(token, nonce, info.folderId));
+    const given = Buffer.from(String(info.proof));
+    if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return null;
+    return { folderId: info.folderId, device: info.device, deviceId: info.deviceId };
+  } catch {
+    return null;
+  }
 }

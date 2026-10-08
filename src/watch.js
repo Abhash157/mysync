@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { listPeers } from './repo.js';
+import { listPeers, getOrCreateFolderId, getOrCreateDeviceId, getOrCreateToken } from './repo.js';
 import { createIgnoreFilter, isPathIgnored } from './ignore.js';
 import { snapshot, getDeviceName } from './auto.js';
-import { syncAll } from './sync.js';
+import { syncAll, adoptDiscoveredPeer } from './sync.js';
+import { startDiscovery } from './discovery.js';
 import { serve } from './server.js';
 
 function stamp() {
@@ -18,7 +19,7 @@ function stamp() {
  * @param {{ port?: number, host?: string, serve?: boolean, interval?: number, debounce?: number }} [options]
  * @returns {{ stop: () => void, syncNow: () => Promise<void> }}
  */
-export function watch(repoRoot, { port = 3000, host = '0.0.0.0', serve: runServer = true, interval = 3, debounce = 500 } = {}) {
+export function watch(repoRoot, { port = 3000, host = '0.0.0.0', serve: runServer = true, discover = true, interval = 3, debounce = 500 } = {}) {
   const log = (msg) => console.log(`[${stamp()}] ${msg}`);
   const peerState = new Map(); // name -> last reported status
   let running = false;
@@ -91,6 +92,37 @@ export function watch(repoRoot, { port = 3000, host = '0.0.0.0', serve: runServe
     server = serve(repoRoot, port, host, { onChange: () => {} });
   }
 
+  let discovery = null;
+  if (discover) {
+    getOrCreateToken(repoRoot);
+    const recentlyFailed = new Map(); // url -> time, so a stranger's packets can't make us spam requests
+    discovery = startDiscovery({
+      announce: runServer
+        ? () => ({
+            folderId: getOrCreateFolderId(repoRoot),
+            deviceId: getOrCreateDeviceId(repoRoot),
+            device: getDeviceName(repoRoot),
+            port,
+          })
+        : () => null,
+      onPeer: async (msg, address) => {
+        if (msg.folderId !== getOrCreateFolderId(repoRoot)) return;
+        const key = `${address}:${msg.port}`;
+        if (Date.now() - (recentlyFailed.get(key) || 0) < 30_000) return;
+        try {
+          if (await adoptDiscoveredPeer(repoRoot, msg, address)) {
+            log(`found ${msg.device} at ${key} on the network`);
+            cycle();
+          } else if (!listPeers(repoRoot).some((p) => p.url === `http://${key}`)) {
+            recentlyFailed.set(key, Date.now());
+          }
+        } catch {
+          recentlyFailed.set(key, Date.now());
+        }
+      },
+    });
+  }
+
   log(`watching ${repoRoot} as '${getDeviceName(repoRoot)}' (${listPeers(repoRoot).length} peer(s))`);
   cycle();
 
@@ -101,6 +133,7 @@ export function watch(repoRoot, { port = 3000, host = '0.0.0.0', serve: runServe
       clearTimeout(timer);
       clearInterval(poll);
       watcher?.close();
+      discovery?.stop();
       server?.close();
     },
   };

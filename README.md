@@ -66,8 +66,12 @@ mysync join http://<device-1-ip>:3000 --token <token> [folder]
 mysync watch
 ```
 
+No IP needed on the same network: `mysync join auto --token <token>` finds the device that accepts the token.
+
 `join` works on an empty folder or one that already has files. Existing files are merged in, never overwritten. After that, saving a file on any device makes it appear on the others within a few seconds, deletes included.
 
+- **Automatic discovery:** `watch` announces itself on the LAN (UDP multicast + broadcast, port 41234, override with `MYSYNC_DISCOVERY_PORT`). After one `join`, all devices in the folder find each other, follow IP changes, and keep syncing if the first device goes away. Turn it off with `watch --no-discover`; `mysync nearby` lists what is announcing.
+- Announcements contain no secrets. Before trusting a device, mysync makes it prove it knows the folder token (challenge-response), so the token is never sent to a stranger. All devices in a folder share one token.
 - `mysync sync` does a single round by hand (useful for cron or if you don't want a daemon).
 - `mysync invite` reprints the join command; `--device <name>` names this device in history.
 - Every device can reach every peer it has a remote for. A phone behind NAT can join a PC and still get live updates, because it polls and pushes outward.
