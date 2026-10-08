@@ -5,7 +5,7 @@ import { listBranches } from './branch.js';
 import { updateBranchRef, GDIF_DIR } from './repo.js';
 
 /**
- * Gets path to object in .gdif/objects/
+ * Gets path to object in .mysync/objects/
  * @param {string} repoRoot
  * @param {string} hash
  * @returns {string}
@@ -21,7 +21,7 @@ function getObjectPath(repoRoot, hash) {
  * @param {string} repoRoot
  * @param {number} port
  */
-export function serve(repoRoot, port = 3000) {
+export function serve(repoRoot, port = 3000, host = '0.0.0.0') {
   const server = http.createServer((req, res) => {
     // CORS headers for convenience
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -107,8 +107,8 @@ export function serve(repoRoot, port = 3000) {
     sendJson(404, { error: 'Not found' });
   });
 
-  server.listen(port, () => {
-    console.log(`gdif server listening on port ${port}`);
-    console.log(`To clone: gdif clone http://<your-ip>:${port} my-repo`);
+  server.listen(port, host, () => {
+    console.log(`mysync server listening on ${host}:${port}`);
+    console.log(`To clone: mysync clone http://<your-ip>:${port} my-repo`);
   });
 }

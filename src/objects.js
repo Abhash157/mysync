@@ -5,7 +5,7 @@ import zlib from 'node:zlib';
 import { GDIF_DIR } from './repo.js';
 
 /**
- * Gets path to object in .gdif/objects/
+ * Gets path to object in .mysync/objects/
  * @param {string} repoRoot
  * @param {string} hash
  * @returns {string}
@@ -199,7 +199,7 @@ export function readCommit(repoRoot, commitHash) {
 
   let treeHash = null;
   let parentHash = null;
-  let author = { name: 'Unknown', email: 'unknown@gdif', timestamp: 0 };
+  let author = { name: 'Unknown', email: 'unknown@mysync', timestamp: 0 };
 
   for (const line of headerPart.split('\n')) {
     if (line.startsWith('tree ')) {

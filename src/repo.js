@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const GDIF_DIR = '.gdif';
+export const GDIF_DIR = '.mysync';
 
 /**
- * Finds the root directory containing the .gdif folder by walking up from startDir.
+ * Finds the root directory containing the .mysync folder by walking up from startDir.
  * @param {string} [startDir=process.cwd()]
  * @returns {string|null} Root path of repository, or null if not inside a repository.
  */
@@ -25,20 +25,20 @@ export function findRepoRoot(startDir = process.cwd()) {
 }
 
 /**
- * Gets the .gdif directory path, throwing if not in a repository.
+ * Gets the .mysync directory path, throwing if not in a repository.
  * @param {string} [startDir=process.cwd()]
- * @returns {string} Path to .gdif directory
+ * @returns {string} Path to .mysync directory
  */
 export function requireRepoRoot(startDir = process.cwd()) {
   const root = findRepoRoot(startDir);
   if (!root) {
-    throw new Error('fatal: not a gdif repository (or any of the parent directories): .gdif');
+    throw new Error('fatal: not a mysync repository (or any of the parent directories): .mysync');
   }
   return root;
 }
 
 /**
- * Initializes a new gdif repository.
+ * Initializes a new mysync repository.
  * @param {string} [targetDir=process.cwd()]
  * @param {string} [defaultBranch='main']
  * @returns {{ initialized: boolean, path: string }}
@@ -68,8 +68,8 @@ export function initRepo(targetDir = process.cwd(), defaultBranch = 'main') {
       defaultBranch,
     },
     user: {
-      name: process.env.GDIF_AUTHOR_NAME || process.env.USER || process.env.USERNAME || 'gdif-user',
-      email: process.env.GDIF_AUTHOR_EMAIL || 'user@gdif.local',
+      name: process.env.MYSYNC_AUTHOR_NAME || process.env.USER || process.env.USERNAME || 'mysync-user',
+      email: process.env.MYSYNC_AUTHOR_EMAIL || 'user@mysync.local',
     },
   };
   fs.writeFileSync(path.join(gdifPath, 'config.json'), JSON.stringify(config, null, 2), 'utf8');
@@ -157,8 +157,8 @@ export function getConfig(repoRoot) {
   return {
     core: { repositoryformatversion: 1 },
     user: {
-      name: process.env.GDIF_AUTHOR_NAME || process.env.USER || process.env.USERNAME || 'gdif-user',
-      email: process.env.GDIF_AUTHOR_EMAIL || 'user@gdif.local',
+      name: process.env.MYSYNC_AUTHOR_NAME || process.env.USER || process.env.USERNAME || 'mysync-user',
+      email: process.env.MYSYNC_AUTHOR_EMAIL || 'user@mysync.local',
     },
     remotes: {},
   };

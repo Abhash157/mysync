@@ -3,8 +3,8 @@ import path from 'node:path';
 import ignore from 'ignore';
 
 const DEFAULT_IGNORES = [
-  '.gdif',
-  '.gdif/**',
+  '.mysync',
+  '.mysync/**',
   '.git',
   '.git/**',
   'node_modules',
@@ -12,7 +12,7 @@ const DEFAULT_IGNORES = [
 ];
 
 /**
- * Creates an ignore filter configured with default patterns and .gdifignore (if present).
+ * Creates an ignore filter configured with default patterns and .mysyncignore (if present).
  * @param {string} repoRoot
  * @returns {import('ignore').Ignore}
  */
@@ -20,7 +20,7 @@ export function createIgnoreFilter(repoRoot) {
   const ig = ignore();
   ig.add(DEFAULT_IGNORES);
 
-  const ignoreFilePath = path.join(repoRoot, '.gdifignore');
+  const ignoreFilePath = path.join(repoRoot, '.mysyncignore');
   if (fs.existsSync(ignoreFilePath)) {
     const content = fs.readFileSync(ignoreFilePath, 'utf8');
     const lines = content

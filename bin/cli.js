@@ -30,20 +30,22 @@ import {
 const program = new Command();
 
 program
-  .name('gdif')
+  .name('mysync')
   .description('Lightweight, Git-like Version Control System (VCS) CLI')
   .version('1.0.0');
 
 // serve
 program
   .command('serve')
-  .description('Start the gdif HTTP server to allow cloning and pushing')
+  .description('Start the mysync HTTP server to allow cloning and pushing')
   .option('-p, --port <number>', 'Port to listen on', 3000)
+  .option('-H, --host <address>', 'Host address to bind to', '0.0.0.0')
+  .option('-d, --dir <path>', 'Path to the repository to serve (defaults to current directory)')
   .action((options) => {
     try {
-      const root = requireRepoRoot();
+      const root = requireRepoRoot(options.dir || process.cwd());
       const port = parseInt(options.port, 10);
-      serve(root, port);
+      serve(root, port, options.host);
     } catch (err) {
       console.error(err.message);
       process.exit(1);
@@ -127,14 +129,14 @@ program
 // init
 program
   .command('init [directory]')
-  .description('Create an empty gdif repository or reinitialize an existing one')
+  .description('Create an empty mysync repository or reinitialize an existing one')
   .action((directory = '.') => {
     try {
       const result = initRepo(directory);
       if (result.initialized) {
-        console.log(`Initialized empty gdif repository in ${result.path}/.gdif`);
+        console.log(`Initialized empty mysync repository in ${result.path}/.mysync`);
       } else {
-        console.log(`Reinitialized existing gdif repository in ${result.path}/.gdif`);
+        console.log(`Reinitialized existing mysync repository in ${result.path}/.mysync`);
       }
     } catch (err) {
       console.error(err.message);

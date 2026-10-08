@@ -102,7 +102,7 @@ function collectObjects(repoRoot, startCommitHash, stopCommitHash) {
  */
 export async function fetch(repoRoot, remoteName) {
   const remoteUrl = getRemote(repoRoot, remoteName);
-  if (!remoteUrl) throw new Error(`fatal: '${remoteName}' does not appear to be a gdif repository`);
+  if (!remoteUrl) throw new Error(`fatal: '${remoteName}' does not appear to be a mysync repository`);
   
   console.log(`Fetching from ${remoteUrl}...`);
   const refs = await fetchRemoteRefs(remoteUrl);
@@ -179,7 +179,7 @@ export async function pull(repoRoot, remoteName, branchName) {
  */
 export async function push(repoRoot, remoteName, branchName) {
   const remoteUrl = getRemote(repoRoot, remoteName);
-  if (!remoteUrl) throw new Error(`fatal: '${remoteName}' does not appear to be a gdif repository`);
+  if (!remoteUrl) throw new Error(`fatal: '${remoteName}' does not appear to be a mysync repository`);
   
   const headInfo = getHeadInfo(repoRoot);
   const localHash = headInfo.commitHash;

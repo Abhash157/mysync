@@ -99,7 +99,7 @@ export function checkout(repoRoot, target, { create = false } = {}) {
       const commit = readCommit(repoRoot, target);
       targetCommitHash = target;
     } catch {
-      throw new Error(`error: pathspec '${target}' did not match any file(s) known to gdif`);
+      throw new Error(`error: pathspec '${target}' did not match any file(s) known to mysync`);
     }
   }
 
@@ -184,7 +184,7 @@ export function restore(repoRoot, filePaths, { staged = false } = {}) {
     } else {
       // Discard working tree changes: restore from index
       if (!index[relTarget]) {
-        throw new Error(`error: pathspec '${targetPath}' did not match any file(s) known to gdif`);
+        throw new Error(`error: pathspec '${targetPath}' did not match any file(s) known to mysync`);
       }
       const fullPath = path.join(repoRoot, relTarget);
       const content = readBlob(repoRoot, index[relTarget].hash);
