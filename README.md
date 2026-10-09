@@ -52,7 +52,8 @@ npm link
 
 ## Desktop app (Windows)
 
-Prefer clicking to typing? The `app/` folder is a Windows desktop app built on the same engine: pick a folder, copy an invite code, paste it on another device. It runs in the system tray, starts with Windows, finds your devices on the network by itself, and tells you in plain language when something needs attention. See [app/README.md](app/README.md) to run it or build the installer.
+Prefer clicking to typing? The `app/` folder is a Windows desktop app built on the same engine: pick a folder, copy an invite code, paste it on another device. It runs in the system tray, starts with Windows, finds your devices on the network by itself, and tells you in plain language when something needs attention. 
+**Download:** get `MySync-Setup-<version>.exe` from the [Releases page](https://github.com/Abhash157/mysync/releases) and follow the [user guide](docs/app-guide.md). Developers: see [app/README.md](app/README.md) to run it from source or build the installer.
 
 ## Seamless Sync (no add / commit / push)
 

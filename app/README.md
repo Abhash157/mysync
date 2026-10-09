@@ -3,6 +3,8 @@
 A desktop app for the MySync engine, for people who would rather not use a command line.
 Pick a folder, copy an invite code to another device, and the folder stays identical on both.
 
+> Just want to use it? Download the installer from the [Releases page](https://github.com/Abhash157/mysync/releases) and read the [user guide](../docs/app-guide.md). The rest of this file is for people building or changing the app.
+
 ## What it does
 
 - **Sync a folder**: choose any folder; MySync saves changes automatically and keeps every device in step.
