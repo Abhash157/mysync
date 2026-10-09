@@ -65,7 +65,16 @@ export function getDeviceName(repoRoot) {
   return getConfig(repoRoot).device || os.hostname() || 'device';
 }
 
-/** Rejects paths that could escape the repo or touch mysync/git internals. */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+
+/** True when every segment is a legal Windows file name (other systems allow more). */
+export function isValidWindowsPath(rel) {
+  return rel
+    .split('/')
+    .every((part) => !/[<>:"|?*\u0000-\u001f]/.test(part) && !/[ .]$/.test(part) && !WINDOWS_RESERVED.test(part));
+}
+
+/** Rejects paths that could escape the repo, touch mysync/git internals, or cannot exist on this OS. */
 export function isSafeRelPath(rel) {
   if (!rel || rel.includes('\0') || rel.includes('\\') || rel.startsWith('/') || /^[a-zA-Z]:/.test(rel)) {
     return false;
@@ -73,7 +82,8 @@ export function isSafeRelPath(rel) {
   const parts = rel.split('/');
   if (parts.some((p) => p === '' || p === '.' || p === '..')) return false;
   const first = parts[0].toLowerCase();
-  return first !== GDIF_DIR && first !== '.git';
+  if (first === GDIF_DIR || first === '.git') return false;
+  return process.platform !== 'win32' || isValidWindowsPath(rel);
 }
 
 function commitFiles(repoRoot, commitHash) {
@@ -156,24 +166,73 @@ function findMergeBase(repoRoot, a, b) {
 // Snapshot: working tree -> commit, no staging required
 // ---------------------------------------------------------------------------
 
-function snapshotNow(repoRoot) {
+const DEFAULT_MAX_FILE_MB = 100;
+const skippedByRepo = new Map();
+
+/** Files the last scan left out because they exceed the size limit. */
+export function getSkippedFiles(repoRoot) {
+  return skippedByRepo.get(repoRoot) || [];
+}
+
+const isGone = (err) => err.code === 'ENOENT' || err.code === 'ENOTDIR';
+
+const deferredByRepo = new Map();
+
+/** How many files the last scan postponed because they were still being written. */
+export function getDeferredCount(repoRoot) {
+  return deferredByRepo.get(repoRoot) || 0;
+}
+
+const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * @param {string} repoRoot
+ * @param {{ quietMs?: number }} [options] Files modified within this window are left for the next scan.
+ */
+async function snapshotNow(repoRoot, { quietMs = 0 } = {}) {
   const head = getHeadInfo(repoRoot);
   if (!head.isBranch) {
     throw new Error('fatal: auto-sync needs a branch checked out (HEAD is detached)');
   }
+  if (!fs.existsSync(repoRoot)) {
+    throw new Error(`fatal: folder not found: ${repoRoot}`);
+  }
 
   const ig = createIgnoreFilter(repoRoot);
   const previous = readIndex(repoRoot);
+  const headFiles = commitFiles(repoRoot, head.commitHash);
+  const maxBytes = (getConfig(repoRoot).maxFileMB || DEFAULT_MAX_FILE_MB) * 1024 * 1024;
   const index = {};
+  const skipped = [];
+  const blockedDirs = [];
+  let deferred = 0;
+  let lastYield = Date.now();
 
-  for (const rel of listWorktreeFiles(repoRoot, repoRoot, ig)) {
+  // A file we cannot read right now (open in another program, no permission, too large)
+  // keeps its last synced version. It must never look like a deletion.
+  const keepLastSynced = (rel, size = 0) => {
+    if (headFiles[rel]) index[rel] = { hash: headFiles[rel], size, mtime: 0, mode: '100644' };
+  };
+
+  for (const rel of listWorktreeFiles(repoRoot, repoRoot, ig, (dir) => blockedDirs.push(dir))) {
+    // Keep long scans from starving the HTTP server and UI messages in the same process.
+    if (Date.now() - lastYield > 30) {
+      await yieldToEventLoop();
+      lastYield = Date.now();
+    }
     if (!isSafeRelPath(rel)) continue;
     const full = path.join(repoRoot, rel);
     let stat;
     try {
       stat = fs.statSync(full);
-    } catch {
+    } catch (err) {
+      if (!isGone(err)) keepLastSynced(rel);
       continue; // vanished while scanning
+    }
+    if (stat.size > maxBytes) {
+      skipped.push({ path: rel, size: stat.size });
+      keepLastSynced(rel, stat.size);
+      continue;
     }
     const mtime = Math.floor(stat.mtimeMs);
     const cached = previous[rel];
@@ -181,16 +240,29 @@ function snapshotNow(repoRoot) {
       index[rel] = cached;
       continue;
     }
+    if (quietMs > 0 && Date.now() - stat.mtimeMs < quietMs) {
+      deferred++; // still being written; pick it up on the next scan
+      keepLastSynced(rel, stat.size);
+      continue;
+    }
     let content;
     try {
       content = fs.readFileSync(full);
-    } catch {
-      continue; // locked or removed
+    } catch (err) {
+      if (!isGone(err)) keepLastSynced(rel, stat.size);
+      continue;
     }
     index[rel] = { hash: writeBlob(repoRoot, content), size: content.length, mtime, mode: '100644' };
   }
 
-  const headFiles = commitFiles(repoRoot, head.commitHash);
+  // Folders we could not list, and names that cannot exist on this system, stay exactly as they were.
+  for (const rel of Object.keys(headFiles)) {
+    if (index[rel]) continue;
+    if (!isSafeRelPath(rel) || blockedDirs.some((dir) => rel.startsWith(`${dir}/`))) keepLastSynced(rel);
+  }
+  skippedByRepo.set(repoRoot, skipped);
+  deferredByRepo.set(repoRoot, deferred);
+
   const changed = new Set();
   for (const [rel, entry] of Object.entries(index)) {
     if (headFiles[rel] !== entry.hash) changed.add(rel);
@@ -227,10 +299,12 @@ function snapshotNow(repoRoot) {
 
 /**
  * Commits whatever changed in the working tree since HEAD. No add/commit needed.
+ * @param {string} repoRoot
+ * @param {{ quietMs?: number }} [options]
  * @returns {Promise<string|null>} New commit hash, or null if nothing changed.
  */
-export function snapshot(repoRoot) {
-  return withLock(repoRoot, () => snapshotNow(repoRoot));
+export function snapshot(repoRoot, options = {}) {
+  return withLock(repoRoot, () => snapshotNow(repoRoot, options));
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +322,12 @@ function moveHeadTo(repoRoot, newHash, mergedFiles = null) {
       throw new Error(`fatal: missing object ${blob}; fetch from the peer again`);
     }
   }
+
+  // Fail before touching anything if a file we must change is open elsewhere (e.g. in Word).
+  assertUnlocked(
+    repoRoot,
+    Object.keys(from).filter((rel) => isSafeRelPath(rel) && from[rel] !== to[rel]),
+  );
 
   const index = {};
 
@@ -269,8 +349,7 @@ function moveHeadTo(repoRoot, newHash, mergedFiles = null) {
     const full = path.join(repoRoot, rel);
     if (from[rel] !== blobHash || !fs.existsSync(full)) {
       if (fs.existsSync(full)) preserveIfEdited(repoRoot, rel, from[rel]);
-      fs.mkdirSync(path.dirname(full), { recursive: true });
-      fs.writeFileSync(full, readBlob(repoRoot, blobHash));
+      writeFileAtomic(full, readBlob(repoRoot, blobHash));
     }
     const stat = fs.statSync(full);
     index[rel] = { hash: blobHash, size: stat.size, mtime: Math.floor(stat.mtimeMs), mode: '100644' };
@@ -278,6 +357,39 @@ function moveHeadTo(repoRoot, newHash, mergedFiles = null) {
 
   updateBranchRef(repoRoot, head.branch, newHash);
   writeIndex(repoRoot, index);
+}
+
+/** Writes via a temp file so a crash never leaves a half-written file that would later sync as an edit. */
+function writeFileAtomic(full, content) {
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const tmp = `${full}.mysync-tmp`;
+  fs.writeFileSync(tmp, content);
+  try {
+    fs.renameSync(tmp, full);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+/**
+ * Throws an error with code 'ELOCKED' if any of these files cannot be modified right now.
+ * Callers treat it as "try again later", not as a failure.
+ */
+function assertUnlocked(repoRoot, rels) {
+  for (const rel of rels) {
+    let fd;
+    try {
+      fd = fs.openSync(path.join(repoRoot, rel), 'r+');
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EISDIR') continue;
+      const locked = new Error(`file is open in another program or read-only: ${rel}`);
+      locked.code = 'ELOCKED';
+      locked.file = rel;
+      throw locked;
+    }
+    fs.closeSync(fd);
+  }
 }
 
 /** If the user edited a file in the instant before we overwrite it, keep their version beside it. */
@@ -363,8 +475,8 @@ function filesToIndex(files) {
  * @returns {Promise<{ action: 'up-to-date'|'fast-forward'|'merged', conflicts: string[], commitHash: string }>}
  */
 export function integrate(repoRoot, theirHash) {
-  return withLock(repoRoot, () => {
-    snapshotNow(repoRoot);
+  return withLock(repoRoot, async () => {
+    await snapshotNow(repoRoot);
     const head = getHeadInfo(repoRoot);
     const ours = head.commitHash;
 
@@ -415,14 +527,14 @@ export function integrate(repoRoot, theirHash) {
  * @returns {Promise<'ok'|'diverged'>}
  */
 export function receive(repoRoot, branch, hash) {
-  return withLock(repoRoot, () => {
+  return withLock(repoRoot, async () => {
     const head = getHeadInfo(repoRoot);
     if (!head.isBranch || head.branch !== branch) {
       updateBranchRef(repoRoot, branch, hash);
       return 'ok';
     }
 
-    snapshotNow(repoRoot);
+    await snapshotNow(repoRoot);
     const ours = getHeadInfo(repoRoot).commitHash;
     if (ours === hash || (ours && isAncestor(repoRoot, hash, ours))) return 'ok';
     if (!ours || isAncestor(repoRoot, ours, hash)) {

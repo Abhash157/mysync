@@ -9,6 +9,14 @@ const DEFAULT_IGNORES = [
   '.git/**',
   'node_modules',
   'node_modules/**',
+  // Temporary / OS-generated files that only cause noise or lock conflicts.
+  '*.mysync-tmp',
+  '~$*',
+  '.~lock.*#',
+  '*.tmp',
+  'Thumbs.db',
+  'desktop.ini',
+  '.DS_Store',
 ];
 
 /**

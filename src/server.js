@@ -14,6 +14,7 @@ import { makeProof } from './client.js';
 const HASH_RE = /^[0-9a-f]{40}$/;
 const BRANCH_RE = /^[a-zA-Z0-9._-]+$/;
 const MAX_BODY = 256 * 1024 * 1024;
+const FETCH_BUDGET = 24 * 1024 * 1024;
 
 export function tokenMatches(provided, expected) {
   const a = crypto.createHash('sha256').update(provided).digest();
@@ -104,13 +105,17 @@ export function handleSyncRequest(req, res, url, { repoRoot, token, bare = false
     // POST /objects/fetch -> { hashes: string[] } -> { objects: { hash: base64 } }
     if (req.method === 'POST' && url === '/objects/fetch') {
       return parseBody().then(({ hashes }) => {
+        // Answer in size-limited pieces; the client asks again for whatever was left out.
         const objects = {};
+        let budget = FETCH_BUDGET;
         for (const hash of hashes) {
           if (!HASH_RE.test(hash)) continue;
           const objPath = getObjectPath(repoRoot, hash);
-          if (fs.existsSync(objPath)) {
-            objects[hash] = fs.readFileSync(objPath).toString('base64');
-          }
+          if (!fs.existsSync(objPath)) continue;
+          const data = fs.readFileSync(objPath);
+          if (Object.keys(objects).length > 0 && data.length > budget) break;
+          objects[hash] = data.toString('base64');
+          budget -= data.length;
         }
         sendJson(200, { objects });
       }).catch((e) => sendJson(400, { error: e.message }));
@@ -157,7 +162,9 @@ export function handleSyncRequest(req, res, url, { repoRoot, token, bare = false
         }
         onChange?.({ branch: branchName, hash: commitHash });
         sendJson(200, { success: true });
-      }).catch((e) => sendJson(400, { error: e.message }));
+      }).catch((e) => (e.code === 'ELOCKED'
+        ? sendJson(423, { error: e.message, code: 'ELOCKED', file: e.file })
+        : sendJson(400, { error: e.message })));
     }
 
     sendJson(404, { error: 'Not found' });

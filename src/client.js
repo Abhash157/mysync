@@ -8,12 +8,12 @@ function asPeer(remote) {
 /**
  * Helper to make a JSON request.
  */
-async function fetchJson(remote, route, method = 'GET', body = null) {
+async function fetchJson(remote, route, method = 'GET', body = null, timeout = 300_000) {
   const { url, token } = asPeer(remote);
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const options = { method, headers, signal: AbortSignal.timeout(60_000) };
+  const options = { method, headers, signal: AbortSignal.timeout(timeout) };
   if (body) {
     options.body = JSON.stringify(body);
   }
@@ -26,6 +26,8 @@ async function fetchJson(remote, route, method = 'GET', body = null) {
   if (!res.ok) {
     const err = new Error(data.error || `HTTP error ${res.status}`);
     err.status = res.status;
+    if (data.code) err.code = data.code;
+    if (data.file) err.file = data.file;
     throw err;
   }
   return data;
@@ -36,7 +38,7 @@ async function fetchJson(remote, route, method = 'GET', body = null) {
  * @returns {Promise<Record<string, string>>} Map of branch name to commit hash
  */
 export async function fetchRemoteRefs(remote) {
-  return fetchJson(remote, '/info/refs');
+  return fetchJson(remote, '/info/refs', 'GET', null, 15_000);
 }
 
 /**
@@ -58,7 +60,7 @@ export async function fetchRemoteObjects(remote, hashes) {
 export async function fetchMissingOnRemote(remote, hashes) {
   const missing = [];
   for (let i = 0; i < hashes.length; i += 2000) {
-    const res = await fetchJson(remote, '/objects/missing', 'POST', { hashes: hashes.slice(i, i + 2000) });
+    const res = await fetchJson(remote, '/objects/missing', 'POST', { hashes: hashes.slice(i, i + 2000) }, 30_000);
     missing.push(...res.missing);
   }
   return missing;

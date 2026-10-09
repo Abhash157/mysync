@@ -50,11 +50,21 @@ export function writeIndex(repoRoot, index) {
  * @param {string} dir
  * @param {string} repoRoot
  * @param {import('ignore').Ignore} ig
+ * @param {((relDir: string) => void)|null} [onUnreadable] Called for folders that exist but cannot be listed.
  * @returns {string[]}
  */
-export function listWorktreeFiles(dir, repoRoot, ig) {
-  const files = [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+export function listWorktreeFiles(dir, repoRoot, ig, onUnreadable = null, files = []) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    // The sync root itself must be readable; deeper folders may vanish or be off limits.
+    if (dir === repoRoot || !onUnreadable) throw err;
+    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
+      onUnreadable(toPosix(path.relative(repoRoot, dir)));
+    }
+    return files;
+  }
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
@@ -65,7 +75,7 @@ export function listWorktreeFiles(dir, repoRoot, ig) {
     }
 
     if (entry.isDirectory()) {
-      files.push(...listWorktreeFiles(fullPath, repoRoot, ig));
+      listWorktreeFiles(fullPath, repoRoot, ig, onUnreadable, files);
     } else if (entry.isFile()) {
       files.push(relPath);
     }

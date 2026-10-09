@@ -50,6 +50,10 @@ npm link
 | `sync` | One automatic sync round | `mysync sync` |
 | `invite` | Print the join command for this folder | `mysync invite` |
 
+## Desktop app (Windows)
+
+Prefer clicking to typing? The `app/` folder is a Windows desktop app built on the same engine: pick a folder, copy an invite code, paste it on another device. It runs in the system tray, starts with Windows, finds your devices on the network by itself, and tells you in plain language when something needs attention. See [app/README.md](app/README.md) to run it or build the installer.
+
 ## Seamless Sync (no add / commit / push)
 
 Run one watcher per device. Edits are saved automatically, merged with the other devices, and pushed out, with nothing to stage or commit.

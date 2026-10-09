@@ -30,3 +30,9 @@ export function setDefaultHub(url, secret = null) {
   if (secret) data.hub.secret = secret;
   writeGlobal(data);
 }
+
+export function clearDefaultHub() {
+  const data = readGlobal();
+  delete data.hub;
+  writeGlobal(data);
+}

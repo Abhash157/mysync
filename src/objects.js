@@ -43,7 +43,7 @@ export function writeObject(repoRoot, type, content) {
 
   if (!fs.existsSync(targetPath)) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    const compressed = zlib.deflateSync(objectData);
+    const compressed = zlib.deflateSync(objectData, { level: 1 });
     fs.writeFileSync(targetPath, compressed);
   }
 

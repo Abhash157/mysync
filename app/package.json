@@ -1,0 +1,64 @@
+{
+  "name": "mysync-app",
+  "productName": "MySync",
+  "version": "0.1.0",
+  "description": "Keep your folders in sync across all your devices",
+  "author": "Abhash Limbu",
+  "private": true,
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "engine": "node scripts/prepare.js",
+    "start": "node scripts/prepare.js && electron .",
+    "pack": "node scripts/prepare.js && electron-builder --win --dir",
+    "dist": "node scripts/prepare.js && electron-builder --win",
+    "test": "node scripts/prepare.js && node test/host.test.js && node test/e2e.test.js"
+  },
+  "dependencies": {
+    "ignore": "^5.3.2"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "playwright-core": "^1.64.0"
+  },
+  "build": {
+    "appId": "com.abhashlimbu.mysync",
+    "productName": "MySync",
+    "asar": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "renderer/**/*",
+      "engine/**/*",
+      "build/*.png",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MySync",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "artifactName": "MySync-Setup-${version}.${ext}"
+  }
+}

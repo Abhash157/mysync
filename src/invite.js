@@ -31,13 +31,13 @@ export function decodeInvite(code) {
 }
 
 /** Invite for this workspace: LAN addresses plus the hub (if published). */
-export function buildInvite(repoRoot, port = 3000) {
+export function buildInvite(repoRoot, port = 3000, { path = '' } = {}) {
   const config = getConfig(repoRoot);
   const data = { t: getOrCreateToken(repoRoot) };
   if (config.hub) {
     data.h = config.hub.url;
     data.w = config.hub.workspace;
   }
-  data.l = lanAddresses().map((ip) => `http://${ip}:${port}`);
+  data.l = lanAddresses().map((ip) => `http://${ip}:${port}${path}`);
   return encodeInvite(data);
 }

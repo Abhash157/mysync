@@ -1,1 +1,5 @@
 node_modules
+app/engine/
+app/dist/
+app/renderer/logo.png
+app/test/shots/

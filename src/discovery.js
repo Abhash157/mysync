@@ -24,8 +24,8 @@ function ipv4Interfaces() {
  * non-secret identity (folder id, device, port); trust comes from verifyPeer().
  *
  * @param {object} options
- * @param {() => ({ folderId: string, deviceId: string, device: string, port: number })|null} [options.announce]
- *   Identity to advertise; omit to only listen.
+ * @param {() => (object|object[]|null)} [options.announce]
+ *   Identities ({ folderId, deviceId, device, port, path? }) to advertise; omit to only listen.
  * @param {(msg: object, address: string) => void} options.onPeer Called for every packet from another device.
  * @param {number} [options.every=5] Seconds between announcements.
  * @returns {{ query: () => void, stop: () => void }}
@@ -49,9 +49,13 @@ export function startDiscovery({ announce = null, onPeer, every = 5 }) {
     socket.send(data, port, '255.255.255.255', () => {});
   };
 
-  const sendAnnounce = () => {
+  const identities = () => {
     const me = announce?.();
-    if (me) send({ mysync: 1, type: 'announce', ...me });
+    return !me ? [] : Array.isArray(me) ? me : [me];
+  };
+
+  const sendAnnounce = () => {
+    for (const me of identities()) send({ mysync: 1, type: 'announce', ...me });
   };
 
   socket.on('error', () => {});
@@ -64,7 +68,7 @@ export function startDiscovery({ announce = null, onPeer, every = 5 }) {
       return;
     }
     if (msg.type !== 'announce' || !msg.deviceId || !Number.isInteger(msg.port)) return;
-    if (msg.deviceId === announce?.()?.deviceId) return;
+    if (identities().some((me) => me.deviceId === msg.deviceId)) return;
     onPeer(msg, rinfo.address);
   });
 
@@ -103,7 +107,7 @@ export function scanNearby({ seconds = 2.5 } = {}) {
     const d = startDiscovery({
       onPeer: (msg, address) => {
         found.set(msg.deviceId, {
-          url: `http://${address}:${msg.port}`,
+          url: `http://${address}:${msg.port}${typeof msg.path === 'string' ? msg.path : ''}`,
           device: msg.device,
           deviceId: msg.deviceId,
           folderId: msg.folderId,

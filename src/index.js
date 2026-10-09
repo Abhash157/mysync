@@ -16,3 +16,4 @@ export * from './discovery.js';
 export * from './hub.js';
 export * from './invite.js';
 export * from './global.js';
+export * from './agent.js';

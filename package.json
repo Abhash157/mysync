@@ -7,9 +7,14 @@
   "bin": {
     "mysync": "bin/cli.js"
   },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
   "scripts": {
     "start": "node bin/cli.js",
-    "test": "node test/vcs.test.js && node test/remote.test.js && node test/auto.test.js && node test/discovery.test.js && node test/hub.test.js"
+    "test": "node test/vcs.test.js && node test/remote.test.js && node test/auto.test.js && node test/discovery.test.js && node test/hub.test.js && node test/agent.test.js"
   },
   "dependencies": {
     "commander": "^11.0.0",

@@ -5,6 +5,7 @@ import {
   listPeers,
   setRemote,
   updateRemoteBranchRef,
+  getRemoteBranchRef,
   initRepo,
   GDIF_DIR,
   getHeadInfo,
@@ -28,7 +29,7 @@ import { getDefaultHub } from './global.js';
 import { isInviteCode, decodeInvite, hubWorkspaceUrl, buildInvite } from './invite.js';
 import { isValidWorkspaceName } from './hub.js';
 import { scanNearby } from './discovery.js';
-import { snapshot, integrate } from './auto.js';
+import { snapshot, integrate, isAncestor } from './auto.js';
 
 const PUSH_BATCH_BYTES = 8 * 1024 * 1024;
 
@@ -70,8 +71,12 @@ async function downloadMissingObjects(repoRoot, peer, rootHashes) {
 
     const objects = await fetchRemoteObjects(peer, batch);
 
-    for (const hash of batch) {
-      if (!objects[hash]) throw new Error(`fatal: remote is missing object ${hash}`);
+    // The server may answer with only part of a large batch; ask again for the rest.
+    const notSent = batch.filter((hash) => !objects[hash]);
+    if (notSent.length === batch.length) throw new Error(`fatal: remote is missing object ${notSent[0]}`);
+    for (const hash of notSent) {
+      requested.delete(hash);
+      queue.push(hash);
     }
     for (const [hash, base64Data] of Object.entries(objects)) {
       const objPath = getObjectPath(repoRoot, hash);
@@ -227,7 +232,7 @@ async function resolveJoinTarget(target, token) {
  * `target` can be an invite code, a workspace name on your hub, 'auto' (find on
  * the LAN) or a URL. Files already here are merged with the peer's, never overwritten.
  */
-export async function join(target, targetDir, { token = null, device = null } = {}) {
+export async function join(target, targetDir, { token = null, device = null, initialSync = true } = {}) {
   const resolved = await resolveJoinTarget(target, token);
   token = resolved.token;
 
@@ -248,6 +253,9 @@ export async function join(target, targetDir, { token = null, device = null } = 
 
   // Every device in a folder shares one token and one folder id.
   const config = getConfig(repoRoot);
+  if (config.folderId && config.folderId !== info.folderId) {
+    throw new Error('fatal: this folder is already synced with a different workspace; choose another folder');
+  }
   config.token = token;
   config.folderId = info.folderId;
   if (device) config.device = device;
@@ -260,9 +268,10 @@ export async function join(target, targetDir, { token = null, device = null } = 
     setRemote(repoRoot, 'hub', hubWorkspaceUrl(resolved.hub.url, resolved.hub.workspace), token);
   }
 
-  const result = await syncPeer(repoRoot, name);
   console.log(`Joined ${url} in ${repoRoot}`);
-  return result;
+  if (!initialSync) return { repoRoot, peer: name };
+  const result = await syncPeer(repoRoot, name);
+  return { ...result, repoRoot, peer: name };
 }
 
 /**
@@ -303,7 +312,7 @@ export async function adoptDiscoveredPeer(repoRoot, msg, address) {
   const config = getConfig(repoRoot);
   if (!config.token || msg.folderId !== getOrCreateFolderId(repoRoot)) return false;
 
-  const url = `http://${address}:${msg.port}`;
+  const url = `http://${address}:${msg.port}${typeof msg.path === 'string' ? msg.path : ''}`;
   const name = peerName(msg.device, msg.deviceId);
   if (config.remotes?.[name] === url) return false;
 
@@ -370,30 +379,45 @@ export async function push(repoRoot, remoteName, branchName) {
 /**
  * One full two-way sync round with a peer: snapshot local edits, merge the
  * peer's changes in, then push the result back. Retries if the peer moved.
+ * Pass skipSnapshot when the caller already scans for local edits itself.
  * @returns {Promise<{ pulled: string, pushed: boolean, conflicts: string[] }>}
  */
-export async function syncPeer(repoRoot, remoteName) {
+export async function syncPeer(repoRoot, remoteName, { skipSnapshot = false } = {}) {
   const peer = requirePeer(repoRoot, remoteName);
   const conflicts = [];
   let pulled = 'up-to-date';
   let pushed = false;
 
-  await snapshot(repoRoot);
+  if (!skipSnapshot) await snapshot(repoRoot);
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const branch = getHeadInfo(repoRoot).branch;
     const refs = await fetchRemoteRefs(peer);
     const theirs = refs[branch];
+    let ours = getHeadInfo(repoRoot).commitHash;
+
+    if (theirs && theirs === ours) {
+      // Already identical: nothing to download, merge or send.
+      if (getRemoteBranchRef(repoRoot, remoteName, branch) !== theirs) {
+        updateRemoteBranchRef(repoRoot, remoteName, branch, theirs);
+      }
+      return { pulled, pushed, conflicts };
+    }
 
     if (theirs) {
       await downloadMissingObjects(repoRoot, peer, [theirs]);
-      updateRemoteBranchRef(repoRoot, remoteName, branch, theirs);
-      const result = await integrate(repoRoot, theirs);
-      if (result.action !== 'up-to-date') pulled = result.action;
-      conflicts.push(...result.conflicts);
+      if (getRemoteBranchRef(repoRoot, remoteName, branch) !== theirs) {
+        updateRemoteBranchRef(repoRoot, remoteName, branch, theirs);
+      }
+      // Only merge when they have something we lack (skips a full folder scan when we are simply ahead).
+      if (!ours || !isAncestor(repoRoot, theirs, ours)) {
+        const result = await integrate(repoRoot, theirs);
+        if (result.action !== 'up-to-date') pulled = result.action;
+        conflicts.push(...result.conflicts);
+        ours = getHeadInfo(repoRoot).commitHash;
+      }
     }
 
-    const ours = getHeadInfo(repoRoot).commitHash;
     if (!ours || ours === theirs) return { pulled, pushed, conflicts };
 
     try {
@@ -414,15 +438,21 @@ export async function syncPeer(repoRoot, remoteName) {
 
 /**
  * Syncs with every configured remote. Failures are reported per peer.
- * @returns {Promise<Array<{ name: string, ok: boolean, error?: string, pulled?: string, pushed?: boolean, conflicts?: string[] }>>}
+ * @returns {Promise<Array<{ name: string, ok: boolean, error?: string, code?: string, file?: string, pulled?: string, pushed?: boolean, conflicts?: string[] }>>}
  */
-export async function syncAll(repoRoot) {
+export async function syncAll(repoRoot, options = {}) {
   const results = [];
   for (const { name } of listPeers(repoRoot)) {
     try {
-      results.push({ name, ok: true, ...(await syncPeer(repoRoot, name)) });
+      results.push({ name, ok: true, ...(await syncPeer(repoRoot, name, options)) });
     } catch (err) {
-      results.push({ name, ok: false, error: err.cause?.code ? `${err.message} (${err.cause.code})` : err.message });
+      results.push({
+        name,
+        ok: false,
+        error: err.cause?.code ? `${err.message} (${err.cause.code})` : err.message,
+        code: err.code || err.cause?.code || (err.status ? `HTTP_${err.status}` : undefined),
+        file: err.file,
+      });
     }
   }
   return results;
