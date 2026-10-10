@@ -1,0 +1,39 @@
+{
+  "name": "mynotes",
+  "productName": "MyNotes",
+  "version": "0.1.0",
+  "description": "A tiny markdown notes app with to-do lists",
+  "author": "Abhash Limbu",
+  "private": true,
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "icons": "node scripts/make-icon.js",
+    "pack": "electron-builder --win --dir",
+    "dist": "electron-builder --win",
+    "test": "node test/e2e.test.js"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "playwright-core": "^1.64.0"
+  },
+  "build": {
+    "appId": "com.abhashlimbu.mynotes",
+    "productName": "MyNotes",
+    "asar": true,
+    "electronLanguages": ["en-US"],
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["src/**/*", "renderer/**/*", "build/icon.png", "package.json"],
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "icon": "build/icon.ico" },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": false,
+      "shortcutName": "MyNotes",
+      "deleteAppDataOnUninstall": false
+    },
+    "artifactName": "MyNotes-Setup-${version}.${ext}"
+  }
+}

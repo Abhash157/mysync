@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyNotes</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <nav id="ribbon">
+    <div class="drag"></div>
+    <button data-i="files" data-act="files" title="Files (Ctrl+\)"></button>
+    <button data-i="search" data-act="search" title="Search (Ctrl+Shift+F)"></button>
+    <button data-i="filePlus" data-act="new" title="New note (Ctrl+N)"></button>
+    <span class="grow"></span>
+    <button data-i="swap" data-act="vault" title="Change notes folder"></button>
+  </nav>
+
+  <aside id="side">
+    <div class="drag"></div>
+    <div id="filesPanel" class="panel">
+      <div class="bar">
+        <span id="vaultName"></span>
+        <button data-i="filePlus" data-act="new" title="New note"></button>
+        <button data-i="folderPlus" data-act="mkdir" title="New folder"></button>
+      </div>
+      <div id="tree"></div>
+    </div>
+    <div id="searchPanel" class="panel" hidden>
+      <div class="bar"><input id="q" placeholder="Search notes…" spellcheck="false"></div>
+      <div id="results"></div>
+    </div>
+  </aside>
+  <div id="resizer"></div>
+
+  <main>
+    <header id="tabbar"><div id="tabs"></div><button id="plus" data-i="plus" data-act="new" title="New note"></button></header>
+    <section id="pane">
+      <div id="page" hidden>
+        <input id="title" spellcheck="false" autocomplete="off">
+        <textarea id="ed" spellcheck="false"></textarea>
+        <div id="view" hidden></div>
+      </div>
+      <div id="empty">
+        <p><b>No note open</b></p>
+        <p><kbd>Ctrl</kbd> <kbd>N</kbd> new note</p>
+        <p><kbd>Ctrl</kbd> <kbd>O</kbd> open a note</p>
+      </div>
+    </section>
+    <footer id="status"><span id="stats"></span><button id="mode" title="Toggle edit / reading (Ctrl+E)"></button></footer>
+  </main>
+</div>
+<div id="modal" hidden><div id="box"><input id="mq" placeholder="Find or create a note…" spellcheck="false"><div id="mlist"></div></div></div>
+<div id="menu" hidden></div>
+<div id="toast" hidden></div>
+<script src="md.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
