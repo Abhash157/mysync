@@ -15,6 +15,10 @@ A tiny markdown notes app for Windows with an Obsidian-style layout: file explor
 | Ctrl+\\ | Toggle sidebar |
 | F2 | Rename the open note |
 
+## Sync
+
+Click the cloud icon (or the status at the bottom left) to sync your notes folder between devices with the same engine as MySync. Choose **Start syncing this folder** to get an invite code, then on the other device choose **I already sync notes on another device** and paste it. Devices on the same network find each other automatically; for the internet, add a MySync server under **Settings** in the sync screen. Sync runs while MyNotes is open, the engine only starts if sync is on, and conflicting edits keep both copies (`name.conflict-xxxx.md`). Anyone with the invite code can read and change the notes.
+
 Tick to-dos in reading view and the file updates. Deleting sends a note to the Recycle Bin. Changes made outside the app (for example by MySync) appear when you switch back to the window.
 
 ```

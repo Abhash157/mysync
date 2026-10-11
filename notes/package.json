@@ -8,11 +8,11 @@
   "type": "module",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/prepare.js && electron .",
     "icons": "node scripts/make-icon.js",
-    "pack": "electron-builder --win --dir",
-    "dist": "electron-builder --win",
-    "test": "node test/e2e.test.js"
+    "pack": "node scripts/prepare.js && electron-builder --win --dir",
+    "dist": "node scripts/prepare.js && electron-builder --win",
+    "test": "node scripts/prepare.js && node test/e2e.test.js && node test/sync.test.js"
   },
   "devDependencies": {
     "electron": "^44.7.0",
@@ -22,11 +22,33 @@
   "build": {
     "appId": "com.abhashlimbu.mynotes",
     "productName": "MyNotes",
-    "asar": true,
-    "electronLanguages": ["en-US"],
-    "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["src/**/*", "renderer/**/*", "build/icon.png", "package.json"],
-    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "icon": "build/icon.ico" },
+    "asar": false,
+    "electronLanguages": [
+      "en-US"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "renderer/**/*",
+      "engine/**/*",
+      "host/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
@@ -35,5 +57,8 @@
       "deleteAppDataOnUninstall": false
     },
     "artifactName": "MyNotes-Setup-${version}.${ext}"
+  },
+  "dependencies": {
+    "ignore": "^5.3.2"
   }
 }

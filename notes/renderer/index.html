@@ -15,6 +15,7 @@
     <button data-i="search" data-act="search" title="Search (Ctrl+Shift+F)"></button>
     <button data-i="filePlus" data-act="new" title="New note (Ctrl+N)"></button>
     <span class="grow"></span>
+    <button id="syncRibbon" data-i="cloud" data-act="sync" title="Sync"></button>
     <button data-i="swap" data-act="vault" title="Change notes folder"></button>
   </nav>
 
@@ -49,13 +50,15 @@
         <p><kbd>Ctrl</kbd> <kbd>O</kbd> open a note</p>
       </div>
     </section>
-    <footer id="status"><span id="stats"></span><button id="mode" title="Toggle edit / reading (Ctrl+E)"></button></footer>
+    <footer id="status"><button id="syncBtn" data-act="sync" title="Sync settings"></button><span id="stats"></span><button id="mode" title="Toggle edit / reading (Ctrl+E)"></button></footer>
   </main>
 </div>
 <div id="modal" hidden><div id="box"><input id="mq" placeholder="Find or create a note…" spellcheck="false"><div id="mlist"></div></div></div>
+<div id="sync" hidden><div class="dlg" id="sbody"></div></div>
 <div id="menu" hidden></div>
 <div id="toast" hidden></div>
 <script src="md.js"></script>
 <script src="app.js"></script>
+<script src="sync.js"></script>
 </body>
 </html>

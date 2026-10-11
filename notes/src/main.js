@@ -1,7 +1,9 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, clipboard } from 'electron';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HostClient } from '../host/host-client.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fsp = fs.promises;
@@ -13,7 +15,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 // ------------------------------------------------------------------ config
 
 const cfgFile = () => path.join(app.getPath('userData'), 'config.json');
-let cfg = { vault: null, session: {}, bounds: null };
+let cfg = { vault: null, session: {}, bounds: null, sync: { on: false, deviceName: '' } };
 
 function loadCfg() {
   try { cfg = { ...cfg, ...JSON.parse(fs.readFileSync(cfgFile(), 'utf8')) }; } catch {}
@@ -139,17 +141,160 @@ const handlers = {
   },
 
   async pick() {
-    const r = await dialog.showOpenDialog(win, { title: 'Choose notes folder', properties: ['openDirectory', 'createDirectory'], defaultPath: vaultDir() });
-    if (r.canceled || !r.filePaths[0]) return null;
-    cfg.vault = r.filePaths[0];
+    const dir = await handlers.pickFolder();
+    if (!dir) return null;
+    if (cfg.sync.on) await stopSync(); // files stay where they are; the old folder just stops syncing
+    cfg.vault = dir;
     cfg.session = {};
     saveCfg();
     return handlers.info();
   },
+  async pickFolder() {
+    const r = await dialog.showOpenDialog(win, { title: 'Choose notes folder', properties: ['openDirectory', 'createDirectory'], defaultPath: vaultDir() });
+    if (r.canceled || !r.filePaths[0]) return null;
+    if (cfg.sync.on && path.resolve(r.filePaths[0]) !== vaultDir()) {
+      const ok = dialog.showMessageBoxSync(win, { type: 'question', buttons: ['Continue', 'Cancel'], defaultId: 1, cancelId: 1, message: 'Syncing will stop for the current notes folder.', detail: 'Its files stay exactly where they are. You can turn sync on again for the new folder.' });
+      if (ok !== 0) return null;
+    }
+    return path.resolve(r.filePaths[0]);
+  },
+  clipboard: () => clipboard.readText().slice(0, 4000),
+  copy: (text) => clipboard.writeText(String(text)),
   session(s) { cfg.session = s; saveCfg(); },
   reveal(rel) { rel ? shell.showItemInFolder(abs(rel)) : shell.openPath(vaultDir()); },
   external(url) { if (/^(https?:|mailto:)/i.test(String(url))) shell.openExternal(url); },
 };
+
+// ------------------------------------------------------------------ sync
+// The sync engine runs in its own process and is only started once sync is turned on, so
+// people who never sync pay nothing for it.
+
+const userError = (m) => new Error(m);
+const sync = { ready: false, starting: false, error: null, snap: null, hub: null };
+let host = null;
+let bootP = null;
+let restarts = 0;
+let stopping = false;
+let syncTimer = null;
+const deviceName = () => cfg.sync.deviceName || os.hostname().replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 40) || 'My PC';
+const sameRoot = (a) => a && path.resolve(a).toLowerCase() === vaultDir().toLowerCase();
+
+function syncState() {
+  return { enabled: !!cfg.sync.on, ready: sync.ready, starting: sync.starting, error: sync.error, snap: sync.snap, hub: sync.hub, deviceName: deviceName(), vault: vaultDir() };
+}
+function pushSync() {
+  if (syncTimer) return;
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    if (win && !win.isDestroyed()) win.webContents.send('sync', syncState());
+  }, 80);
+}
+
+function bootEngine() {
+  if (bootP) return bootP;
+  sync.starting = true;
+  sync.error = null;
+  pushSync();
+  stopping = false;
+  const h = new HostClient({
+    entry: path.join(here, '..', 'host', 'engine-host.mjs'),
+    env: process.env.MYSYNC_DISCOVERY_PORT ? { MYSYNC_DISCOVERY_PORT: process.env.MYSYNC_DISCOVERY_PORT } : {},
+  });
+  host = h;
+  h.on('event:update', (snap) => { if (sameRoot(snap.root)) { sync.snap = snap; pushSync(); } });
+  h.on('event:removed', ({ root }) => { if (sameRoot(root)) { sync.snap = null; pushSync(); } });
+  h.on('event:notify', (info) => { if (win && !win.isDestroyed()) win.webContents.send('sync-notify', info); });
+  h.on('exit', ({ expected }) => {
+    host = null;
+    bootP = null;
+    sync.ready = false;
+    if (expected || stopping || !cfg.sync.on) return;
+    if (++restarts > 5) { sync.error = 'The sync engine keeps stopping. Please restart MyNotes.'; sync.starting = false; pushSync(); return; }
+    sync.error = 'The sync engine stopped. Restarting...';
+    pushSync();
+    setTimeout(() => bootEngine().catch(() => {}), 1500 * restarts);
+  });
+  bootP = (async () => {
+    await h.start();
+    await h.call('init', { deviceName: deviceName(), port: Number(process.env.MYNOTES_ENGINE_PORT) || 3010 });
+    if (cfg.sync.on) {
+      const list = await h.call('restore', { folders: [{ root: vaultDir() }] });
+      sync.snap = list.find((s) => sameRoot(s.root)) || null;
+    }
+    sync.hub = await h.call('getHub');
+    sync.ready = true;
+    sync.starting = false;
+    sync.error = null;
+    setTimeout(() => { restarts = 0; }, 60_000).unref?.();
+    pushSync();
+  })().catch((err) => {
+    bootP = null;
+    sync.starting = false;
+    sync.error = err.message;
+    pushSync();
+    throw err;
+  });
+  return bootP;
+}
+
+const engine = async (cmd, args) => { await bootEngine(); return host.call(cmd, args); };
+
+async function stopSync() {
+  if (host && sync.ready) { try { await host.call('removeFolder', { root: vaultDir() }); } catch {} }
+  cfg.sync.on = false;
+  sync.snap = null;
+  saveCfg();
+  stopping = true;
+  const h = host;
+  host = null; bootP = null; sync.ready = false;
+  if (h) await h.stop();
+  pushSync();
+}
+
+Object.assign(handlers, {
+  syncState,
+  syncRetry: () => bootEngine().then(() => true),
+  async syncEnable() {
+    await engine('addFolder', { root: vaultDir() });
+    cfg.sync.on = true;
+    saveCfg();
+    sync.snap = (await host.call('list')).find((s) => sameRoot(s.root)) || null;
+    pushSync();
+    return handlers.syncInvite();
+  },
+  async syncJoin(code, dest) {
+    if (cfg.sync.on) throw userError('Stop syncing the current notes folder first.');
+    dest = path.resolve(dest || vaultDir());
+    if (dest === vaultDir()) { // an untouched welcome note would only clash with the real one
+      const files = fs.readdirSync(dest);
+      const w = path.join(dest, 'Welcome.md');
+      if (files.length === 1 && files[0] === 'Welcome.md' && fs.readFileSync(w, 'utf8') === WELCOME) fs.unlinkSync(w);
+    }
+    const snap = await engine('joinFolder', { code, dest });
+    if (dest !== vaultDir()) { cfg.vault = dest; cfg.session = {}; }
+    sync.snap = snap;
+    cfg.sync.on = true;
+    saveCfg();
+    pushSync();
+    return handlers.info();
+  },
+  async syncInvite() { return (await engine('invite', { root: vaultDir() })).code; },
+  async syncPublish(name) { const r = await engine('publish', { root: vaultDir(), name }); sync.snap = r.snapshot; pushSync(); return r.code; },
+  syncInspect: (code) => engine('inspectInvite', { code }),
+  syncNow: () => engine('syncNow', { root: vaultDir() }),
+  syncPause: () => engine('pause', { root: vaultDir() }),
+  syncResume: () => engine('resume', { root: vaultDir() }),
+  syncStop: stopSync,
+  async syncDevice(name) {
+    const n = await engine('setDeviceName', { name });
+    cfg.sync.deviceName = n;
+    saveCfg();
+    pushSync();
+    return n;
+  },
+  async syncHub(url, secret) { sync.hub = await engine('setHub', { url, secret }); pushSync(); return sync.hub; },
+  syncTestHub: (url) => engine('testHub', { url }),
+});
 
 for (const [name, fn] of Object.entries(handlers)) {
   ipcMain.handle('n:' + name, async (_e, ...args) => {
@@ -202,8 +347,15 @@ app.whenReady().then(() => {
   loadCfg();
   Menu.setApplicationMenu(null);
   createWindow();
+  if (cfg.sync.on) bootEngine().catch(() => {});
   nativeTheme.on('updated', () => { try { win.setTitleBarOverlay(overlay()); } catch {} });
   if (process.env.MYNOTES_DEVTOOLS) win.webContents.openDevTools({ mode: 'detach' });
 });
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 app.on('window-all-closed', () => app.quit());
+app.on('before-quit', (e) => {
+  if (!host || stopping) return;
+  e.preventDefault();
+  stopping = true;
+  Promise.race([host.stop(), new Promise((r) => setTimeout(r, 2500))]).finally(() => app.exit(0));
+});

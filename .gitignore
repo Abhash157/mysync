@@ -5,3 +5,5 @@ app/renderer/logo.png
 app/test/shots/
 notes/dist/
 notes/test/shots/
+notes/engine/
+notes/host/

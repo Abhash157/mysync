@@ -13,6 +13,7 @@
     chev: '<path d="m9 6 6 6-6 6"/>',
     x: '<path d="M6 6l12 12M18 6 6 18"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    cloud: '<path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 1 0 5 14.5 3.5 3.5 0 0 0 6.5 19z"/>',
     swap: '<path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/>',
   };
   const svg = (k) => `<svg viewBox="0 0 24 24">${P[k]}</svg>`;
@@ -491,18 +492,22 @@
 
   // ---------------------------------------------------------------- shell: ribbon, resize, keys
 
-  const changeVault = guard(async () => {
-    await flush();
-    const info = await api.pick();
-    if (!info) return;
+  const vaultLabel = (v) => base(v.replace(/[\\/]+$/, '').replace(/\\/g, '/'));
+  function loadVault(info) {
     S.tabs = []; S.active = -1; S.open = new Set();
     S.vault = info.vault;
-    $('#vaultName').textContent = base(info.vault.replace(/[\\/]+$/, '').replace(/\\/g, '/'));
+    $('#vaultName').textContent = vaultLabel(info.vault);
     setFiles(info.files);
     renderTabs();
     show();
     persist();
+  }
+  const changeVault = guard(async () => {
+    await flush();
+    const info = await api.pick();
+    if (info) loadVault(info);
   });
+  window.notes = { toast, guard, loadVault, flush, refresh, reload: () => reload() };
 
   document.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
@@ -513,6 +518,7 @@
     else if (act === 'new') newNote('');
     else if (act === 'mkdir') newFolder('');
     else if (act === 'vault') changeVault();
+    else if (act === 'sync') window.notes.openSync();
   });
 
   const resizer = $('#resizer');
@@ -563,7 +569,7 @@
   }
 
   // Pick up edits made elsewhere (e.g. by the sync app) whenever the window regains focus.
-  api.onFocus(guard(async () => {
+  const reload = guard(async () => {
     await refresh();
     for (let i = S.tabs.length - 1; i >= 0; i--) {
       const t = S.tabs[i];
@@ -579,7 +585,8 @@
         }
       }
     }
-  }));
+  });
+  api.onFocus(reload);
 
   (async () => {
     const info = await api.info();
