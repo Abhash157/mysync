@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, clipboard, Notification } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,7 @@ const fsp = fs.promises;
 // Tests point the app at a throwaway profile and notes folder.
 if (process.env.MYNOTES_USER_DATA) app.setPath('userData', process.env.MYNOTES_USER_DATA);
 if (!app.requestSingleInstanceLock()) app.quit();
+app.setAppUserModelId('com.abhashlimbu.mynotes');
 
 // ------------------------------------------------------------------ config
 
@@ -170,17 +171,19 @@ const handlers = {
 // people who never sync pay nothing for it.
 
 const userError = (m) => new Error(m);
-const sync = { ready: false, starting: false, error: null, snap: null, hub: null };
+// Calls that only make sense while syncing must never start the engine themselves (a stale screen could ask after sync was stopped).
+const needOn = () => { if (!cfg.sync.on) throw userError('Sync is off'); };
+const sync = { ready: false, starting: false, error: null, snap: null, hub: null, pairs: new Map() };
 let host = null;
 let bootP = null;
 let restarts = 0;
 let stopping = false;
 let syncTimer = null;
-const deviceName = () => cfg.sync.deviceName || os.hostname().replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 40) || 'My PC';
+const deviceName = () => process.env.MYNOTES_DEVICE_NAME || cfg.sync.deviceName || os.hostname().replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 40) || 'My PC';
 const sameRoot = (a) => a && path.resolve(a).toLowerCase() === vaultDir().toLowerCase();
 
 function syncState() {
-  return { enabled: !!cfg.sync.on, ready: sync.ready, starting: sync.starting, error: sync.error, snap: sync.snap, hub: sync.hub, deviceName: deviceName(), vault: vaultDir() };
+  return { enabled: !!cfg.sync.on, ready: sync.ready, starting: sync.starting, error: sync.error, snap: sync.snap, hub: sync.hub, pairs: [...sync.pairs.values()], deviceName: deviceName(), vault: vaultDir() };
 }
 function pushSync() {
   if (syncTimer) return;
@@ -204,10 +207,24 @@ function bootEngine() {
   h.on('event:update', (snap) => { if (sameRoot(snap.root)) { sync.snap = snap; pushSync(); } });
   h.on('event:removed', ({ root }) => { if (sameRoot(root)) { sync.snap = null; pushSync(); } });
   h.on('event:notify', (info) => { if (win && !win.isDestroyed()) win.webContents.send('sync-notify', info); });
+  h.on('event:pair', (info) => {
+    sync.pairs.set(info.id, info);
+    pushSync();
+    if (win && !win.isDestroyed() && !win.isFocused()) {
+      win.flashFrame(true);
+      if (Notification.isSupported() && !process.env.MYNOTES_USER_DATA) { // tests run with a throwaway profile and stay quiet
+        const n = new Notification({ title: 'A device wants to sync', body: `${info.device} wants to sync with your notes. Open MyNotes to allow it.`, icon: path.join(here, '..', 'build', 'icon.png') });
+        n.on('click', () => { win.show(); win.focus(); });
+        n.show();
+      }
+    }
+  });
+  h.on('event:pairEnd', ({ id }) => { sync.pairs.delete(id); pushSync(); });
   h.on('exit', ({ expected }) => {
     host = null;
     bootP = null;
     sync.ready = false;
+    sync.pairs.clear();
     if (expected || stopping || !cfg.sync.on) return;
     if (++restarts > 5) { sync.error = 'The sync engine keeps stopping. Please restart MyNotes.'; sync.starting = false; pushSync(); return; }
     sync.error = 'The sync engine stopped. Restarting...';
@@ -216,7 +233,7 @@ function bootEngine() {
   });
   bootP = (async () => {
     await h.start();
-    await h.call('init', { deviceName: deviceName(), port: Number(process.env.MYNOTES_ENGINE_PORT) || 3010 });
+    await h.call('init', { deviceName: deviceName(), port: Number(process.env.MYNOTES_ENGINE_PORT) || 3010, pairing: true });
     if (cfg.sync.on) {
       const list = await h.call('restore', { folders: [{ root: vaultDir() }] });
       sync.snap = list.find((s) => sameRoot(s.root)) || null;
@@ -230,29 +247,59 @@ function bootEngine() {
   })().catch((err) => {
     bootP = null;
     sync.starting = false;
-    sync.error = err.message;
+    if (!stopping) sync.error = err.message; // stopped on purpose is not a problem
     pushSync();
     throw err;
   });
   return bootP;
 }
 
-const engine = async (cmd, args) => { await bootEngine(); return host.call(cmd, args); };
+const engine = async (cmd, args) => {
+  await bootEngine();
+  if (!host) throw userError('The sync engine is not running');
+  return host.call(cmd, args);
+};
+
+// Only ever talk to folder addresses of the form the engine announces on the local network.
+const folderUrl = (u) => {
+  if (!/^http:\/\/[\w.:[\]-]+\/f\/[0-9a-f]{16}$/.test(String(u))) throw userError('That is not a device address');
+  return u;
+};
+
+async function stopEngine() {
+  stopping = true;
+  const h = host;
+  host = null; bootP = null; sync.ready = false; sync.starting = false; sync.pairs.clear();
+  if (h) await h.stop();
+  pushSync();
+}
 
 async function stopSync() {
   if (host && sync.ready) { try { await host.call('removeFolder', { root: vaultDir() }); } catch {} }
   cfg.sync.on = false;
   sync.snap = null;
   saveCfg();
-  stopping = true;
-  const h = host;
-  host = null; bootP = null; sync.ready = false;
-  if (h) await h.stop();
-  pushSync();
+  await stopEngine();
 }
 
 Object.assign(handlers, {
   syncState,
+  // The join screen looks for devices on the network, which needs the engine; it is stopped again afterwards.
+  async syncScan(on) {
+    if (on) await bootEngine();
+    else if (!cfg.sync.on) await stopEngine();
+    return true;
+  },
+  syncNearby: () => engine('nearby'),
+  syncPairRequest: (urls) => engine('pairRequest', { urls: [].concat(urls).map(folderUrl), device: deviceName() }),
+  syncPairPoll: (url, id) => engine('pairPoll', { url: folderUrl(url), id: String(id) }),
+  syncPairCancel: (url, id) => engine('pairCancel', { url: folderUrl(url), id: String(id) }),
+  async syncPairAnswer(id, allow) {
+    const ok = await engine('pairAnswer', { id: String(id), allow: !!allow });
+    sync.pairs.delete(String(id));
+    pushSync();
+    return ok;
+  },
   syncRetry: () => bootEngine().then(() => true),
   async syncEnable() {
     await engine('addFolder', { root: vaultDir() });
@@ -278,12 +325,12 @@ Object.assign(handlers, {
     pushSync();
     return handlers.info();
   },
-  async syncInvite() { return (await engine('invite', { root: vaultDir() })).code; },
-  async syncPublish(name) { const r = await engine('publish', { root: vaultDir(), name }); sync.snap = r.snapshot; pushSync(); return r.code; },
+  async syncInvite() { needOn(); return (await engine('invite', { root: vaultDir() })).code; },
+  async syncPublish(name) { needOn(); const r = await engine('publish', { root: vaultDir(), name }); sync.snap = r.snapshot; pushSync(); return r.code; },
   syncInspect: (code) => engine('inspectInvite', { code }),
-  syncNow: () => engine('syncNow', { root: vaultDir() }),
-  syncPause: () => engine('pause', { root: vaultDir() }),
-  syncResume: () => engine('resume', { root: vaultDir() }),
+  syncNow: () => { needOn(); return engine('syncNow', { root: vaultDir() }); },
+  syncPause: () => { needOn(); return engine('pause', { root: vaultDir() }); },
+  syncResume: () => { needOn(); return engine('resume', { root: vaultDir() }); },
   syncStop: stopSync,
   async syncDevice(name) {
     const n = await engine('setDeviceName', { name });
@@ -334,7 +381,7 @@ function createWindow() {
   if (b.max) win.maximize();
   win.loadFile(path.join(here, '..', 'renderer', 'index.html'));
   win.once('ready-to-show', () => win.show());
-  win.on('focus', () => win.webContents.send('focus'));
+  win.on('focus', () => { win.flashFrame(false); win.webContents.send('focus'); });
   win.on('close', () => {
     cfg.bounds = { ...win.getNormalBounds(), max: win.isMaximized() };
     saveCfg();

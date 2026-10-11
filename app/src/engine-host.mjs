@@ -56,14 +56,16 @@ function inviteFor(root) {
 }
 
 const handlers = {
-  async init({ deviceName: name, port = 3000, discover = true, interval = 3 } = {}) {
+  async init({ deviceName: name, port = 3000, discover = true, interval = 3, pairing = false } = {}) {
     if (agent) throw userError('Already started.');
     deviceName = cleanDeviceName(name || deviceName);
-    agent = new E.Agent({ port, discover, interval, debounce: 600 });
+    agent = new E.Agent({ port, discover, interval, debounce: 600, pairing });
     agent.on('update', (snap) => emit('update', snap));
     agent.on('removed', (info) => emit('removed', info));
     agent.on('notify', (info) => emit('notify', info));
     agent.on('server', (info) => emit('server', info));
+    agent.on('pair', (info) => emit('pair', info));
+    agent.on('pairEnd', (info) => emit('pairEnd', info));
     await agent.start();
     return { port: agent.port };
   },
@@ -109,6 +111,37 @@ const handlers = {
     } catch {
       return { valid: false };
     }
+  },
+
+  // ---- joining without an invite code: nearby devices, asking, and answering ----
+
+  /** Devices on the network that accept join requests, for a "join" screen. */
+  nearby() {
+    return requireAgent().nearby();
+  },
+
+  /** Ask a nearby device to let this one join. Returns { id, code, url } to show and poll. */
+  pairRequest({ urls, device }) {
+    return E.requestPairing(urls, cleanDeviceName(device || deviceName));
+  },
+
+  /** { status: 'pending' | 'approved' (with invite) | 'denied' | 'expired' | 'gone' } */
+  pairPoll({ url, id }) {
+    return E.pollPairing(url, id);
+  },
+
+  async pairCancel({ url, id }) {
+    await E.cancelPairing(url, id);
+    return true;
+  },
+
+  /** Requests from other devices waiting for this device's owner. */
+  pairList() {
+    return requireAgent().pendingPairs();
+  },
+
+  pairAnswer({ id, allow }) {
+    return requireAgent().answerPair(String(id), !!allow);
   },
 
   async joinFolder({ code, dest, token = null }) {

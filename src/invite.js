@@ -31,13 +31,14 @@ export function decodeInvite(code) {
 }
 
 /** Invite for this workspace: LAN addresses plus the hub (if published). */
-export function buildInvite(repoRoot, port = 3000, { path = '' } = {}) {
+export function buildInvite(repoRoot, port = 3000, { path = '', prefer = null } = {}) {
   const config = getConfig(repoRoot);
   const data = { t: getOrCreateToken(repoRoot) };
   if (config.hub) {
     data.h = config.hub.url;
     data.w = config.hub.workspace;
   }
-  data.l = lanAddresses().map((ip) => `http://${ip}:${port}${path}`);
+  // `prefer`: the address the new device already reached us on, so it is tried first.
+  data.l = [...new Set([...(prefer ? [prefer] : []), ...lanAddresses()])].map((ip) => `http://${ip}:${port}${path}`);
   return encodeInvite(data);
 }

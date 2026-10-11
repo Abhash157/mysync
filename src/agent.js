@@ -21,6 +21,8 @@ import { flattenTree } from './commit.js';
 import { syncPeer, adoptDiscoveredPeer, peerName } from './sync.js';
 import { startDiscovery } from './discovery.js';
 import { handleSyncRequest } from './server.js';
+import { buildInvite } from './invite.js';
+import { PairingBook, PAIR_TTL_MS, isLocalAddress, plainAddress, cleanDeviceName, readSmallJson } from './pairing.js';
 
 const BUSY_AFTER_MS = 700;
 const MAX_ACTIVITY = 60;
@@ -633,25 +635,39 @@ function listen(server, port, host, tries) {
  * /f/<folderId>/ on a single port. For the single-folder CLI, `rootWorkspace`
  * additionally serves that folder at the server root.
  *
- * Events: 'update' (workspace snapshot), 'removed' ({ root }), 'notify', 'server' ({ port, error }).
+ * Events: 'update' (workspace snapshot), 'removed' ({ root }), 'notify', 'server' ({ port, error }),
+ * and with `pairing`: 'pair' (a device asks to join) and 'pairEnd' ({ id, status }).
+ *
+ * `pairing` lets devices on the local network ask to join a folder without an invite code. The
+ * folder's owner must approve each request (answerPair); only then is the invite handed over.
  */
 export class Agent extends EventEmitter {
   /**
    * @param {{ port?: number, host?: string, portTries?: number, serve?: boolean, discover?: boolean,
-   *           interval?: number, debounce?: number, rootWorkspace?: string|null }} [options]
+   *           interval?: number, debounce?: number, rootWorkspace?: string|null, pairing?: boolean }} [options]
    */
-  constructor({ port = 3000, host = '0.0.0.0', portTries = 20, serve = true, discover = true, interval = 3, debounce = 600, rootWorkspace = null } = {}) {
+  constructor({ port = 3000, host = '0.0.0.0', portTries = 20, serve = true, discover = true, interval = 3, debounce = 600, rootWorkspace = null, pairing = false } = {}) {
     super();
-    this.options = { port, host, portTries, serve, discover, interval, debounce };
+    this.options = { port, host, portTries, serve, discover, interval, debounce, pairing: pairing && serve };
     this.rootWorkspace = rootWorkspace ? path.resolve(rootWorkspace) : null;
     this.workspaces = new Map();
     this.port = null;
     this.server = null;
     this.discovery = null;
     this.recentlyFailed = new Map();
+    this.pairing = null;
+    this.pairTimer = null;
+    this.seen = new Map(); // nearby devices that accept join requests
   }
 
   async start() {
+    if (this.options.pairing) {
+      this.pairing = new PairingBook();
+      this.pairing.on('request', (info) => this.emit('pair', info));
+      this.pairing.on('end', (info) => this.emit('pairEnd', info));
+      this.pairTimer = setInterval(() => this.pairing.sweep(), 5000);
+      this.pairTimer.unref?.();
+    }
     if (this.options.serve) {
       this.server = http.createServer((req, res) => this._handle(req, res));
       this.server.on('error', () => {});
@@ -674,6 +690,7 @@ export class Agent extends EventEmitter {
   }
 
   stop() {
+    clearInterval(this.pairTimer);
     this.discovery?.stop();
     for (const ws of this.workspaces.values()) ws.stop();
     this.server?.close();
@@ -725,6 +742,7 @@ export class Agent extends EventEmitter {
     const ws = this.workspaces.get(resolved);
     if (!ws) return false;
     ws.stop();
+    if (ws.folderId) this.pairing?.withdrawFolder(ws.folderId);
     this.workspaces.delete(resolved);
     this.emit('removed', { root: resolved });
     return true;
@@ -759,7 +777,84 @@ export class Agent extends EventEmitter {
         device: ws.deviceName,
         port: this.port,
         ...(ws.root === this.rootWorkspace ? {} : { path: `/f/${ws.folderId}` }),
+        // Open to join requests (the owner still has to approve each one).
+        ...(this.pairing && !ws.paused && ws.root !== this.rootWorkspace ? { pair: 1, name: ws.name } : {}),
       }));
+  }
+
+  /**
+   * Devices on the network that accept join requests for a folder this agent does not sync yet.
+   * Each lists every address it was heard on, newest first, because a PC can announce from several adapters.
+   */
+  nearby() {
+    const cutoff = Date.now() - 15_000;
+    const out = [];
+    for (const [key, entry] of this.seen) {
+      if (entry.at < cutoff) { this.seen.delete(key); continue; }
+      if (this._findById(entry.folderId)) continue;
+      const urls = [...entry.urls].filter(([, at]) => at >= cutoff).sort((a, b) => b[1] - a[1]).map(([url]) => url);
+      out.push({ deviceId: entry.deviceId, folderId: entry.folderId, device: entry.device, name: entry.name, urls });
+    }
+    return out.sort((a, b) => a.device.localeCompare(b.device));
+  }
+
+  _noteNearby(msg, address) {
+    if (!msg.pair || !/^[0-9a-f]{16}$/.test(String(msg.folderId)) || msg.path !== `/f/${msg.folderId}`) return;
+    const key = `${msg.deviceId}/${msg.folderId}`;
+    const entry = this.seen.get(key) || { deviceId: String(msg.deviceId), folderId: msg.folderId, urls: new Map() };
+    entry.device = cleanDeviceName(msg.device);
+    entry.name = String(msg.name || '').slice(0, 60);
+    entry.at = Date.now();
+    entry.urls.set(`http://${address}:${msg.port}${msg.path}`, entry.at);
+    this.seen.set(key, entry);
+  }
+
+  /** Join requests waiting for this device's owner to answer. */
+  pendingPairs() {
+    return this.pairing ? this.pairing.list() : [];
+  }
+
+  /** Allow or decline a join request. Allowing hands the asking device this folder's invite. */
+  answerPair(id, allow) {
+    const req = this.pairing?.get(id);
+    const ws = req && this._findById(req.folderId);
+    if (!req) return false;
+    if (!ws || ws.stopped || ws.paused) allow = false;
+    const done = this.pairing.answer(id, allow, (r) => buildInvite(ws.root, this.port, { path: this.pathFor(ws.root), prefer: r.via }));
+    if (done && ws) ws._log(allow ? `Allowed ${req.device} to sync` : `Declined ${req.device}`, allow ? 'info' : 'warn');
+    return !!done;
+  }
+
+  _handlePair(req, res, folderId, reqId, reply) {
+    const ws = this._findById(folderId);
+    if (!ws || ws.stopped) return reply(404, { error: 'Not found' });
+    if (!isLocalAddress(req.socket.remoteAddress)) return reply(403, { error: 'Only devices on your own network can ask to join' });
+    if (ws.paused) return reply(503, { error: 'Syncing is paused on that device' });
+
+    if (req.method === 'POST' && !reqId) {
+      return readSmallJson(req).then((body) => {
+        const asked = this.pairing.request({
+          folderId,
+          name: ws.name,
+          device: cleanDeviceName(body.device),
+          address: plainAddress(req.socket.remoteAddress),
+          via: plainAddress(req.socket.localAddress),
+        });
+        reply(200, { id: asked.id, code: asked.code, expiresIn: Math.round(PAIR_TTL_MS / 1000) });
+      }).catch((err) => {
+        if (err.status === 413) res.setHeader('Connection', 'close');
+        reply(err.status || 400, { error: err.message });
+      });
+    }
+
+    const asked = reqId && this.pairing.get(reqId);
+    if (!asked || asked.folderId !== folderId) return reply(404, { status: 'gone' });
+    if (req.method === 'GET') return reply(200, asked.status === 'approved' ? { status: 'approved', invite: asked.invite } : { status: asked.status });
+    if (req.method === 'DELETE') {
+      this.pairing.withdraw(reqId);
+      return reply(200, { ok: true });
+    }
+    reply(405, { error: 'Method not allowed' });
   }
 
   _handle(req, res) {
@@ -767,6 +862,10 @@ export class Agent extends EventEmitter {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(data));
     };
+
+    // Join requests come from devices that have no token yet, so they are answered before the token check.
+    const pair = this.pairing && req.url.match(/^\/f\/([0-9a-f]{16})\/pair(?:\/([0-9a-f]{32}))?$/);
+    if (pair) return this._handlePair(req, res, pair[1], pair[2], reply);
 
     let ws = null;
     let url = req.url;
@@ -792,6 +891,7 @@ export class Agent extends EventEmitter {
   }
 
   async _onPeer(msg, address) {
+    this._noteNearby(msg, address);
     const ws = this._findById(msg.folderId);
     if (!ws || ws.paused || ws.stopped) return;
     const key = `${address}:${msg.port}${msg.path || ''}`;
