@@ -14,10 +14,13 @@
   ],
   "scripts": {
     "start": "node bin/cli.js",
-    "test": "node test/vcs.test.js && node test/remote.test.js && node test/auto.test.js && node test/discovery.test.js && node test/hub.test.js && node test/agent.test.js && node test/pairing.test.js"
+    "test": "node test/merge.test.js && node test/vcs.test.js && node test/remote.test.js && node test/auto.test.js && node test/discovery.test.js && node test/hub.test.js && node test/agent.test.js && node test/pairing.test.js && node test/cloud.test.js"
   },
   "dependencies": {
     "commander": "^11.0.0",
     "ignore": "^5.2.4"
+  },
+  "optionalDependencies": {
+    "megajs": "^1.3.10"
   }
 }

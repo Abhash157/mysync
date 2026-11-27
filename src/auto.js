@@ -5,6 +5,7 @@ import { GDIF_DIR, getHeadInfo, updateBranchRef, getConfig } from './repo.js';
 import { readCommit, writeCommit, writeBlob, readBlob, hashObject, getObjectPath } from './objects.js';
 import { readIndex, writeIndex, listWorktreeFiles } from './staging.js';
 import { createIgnoreFilter } from './ignore.js';
+import { decodeText, merge3 } from './merge.js';
 import { buildTreeFromIndex, flattenTree } from './commit.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -413,12 +414,15 @@ function preserveIfEdited(repoRoot, rel, expectedHash) {
 // ---------------------------------------------------------------------------
 
 /**
- * Three-way merge at file granularity. Never discards data: when both sides
- * changed a file, the newer commit keeps the path and the other version is
- * saved as `<name>.conflict-<hash><ext>`. The result is symmetric, so two
- * devices merging each other's heads produce the same tree.
+ * Three-way merge. Never discards data: when both sides changed a file,
+ * `mergeText` combines them line by line inside that file. When it cannot (binary
+ * files), the newer commit keeps the path and the other version is saved as
+ * `<name>.conflict-<hash><ext>`. The result is symmetric, so two devices merging
+ * each other's heads produce the same tree.
+ *
+ * @param {(base: string|undefined, older: string, newer: string) => ({ hash: string, conflicted: boolean } | null)} [mergeText]
  */
-export function mergeFileMaps(base, ours, theirs, oursWins) {
+export function mergeFileMaps(base, ours, theirs, oursWins, mergeText = () => null) {
   const files = {};
   const conflicts = [];
 
@@ -436,9 +440,15 @@ export function mergeFileMaps(base, ours, theirs, oursWins) {
     else {
       const winner = oursWins ? o : t;
       const loser = oursWins ? t : o;
-      result = winner;
-      files[conflictPath(rel, loser)] = loser;
-      conflicts.push(rel);
+      const merged = mergeText(b, loser, winner);
+      if (merged) {
+        result = merged.hash;
+        if (merged.conflicted) conflicts.push(rel);
+      } else {
+        result = winner;
+        files[conflictPath(rel, loser)] = loser;
+        conflicts.push(rel);
+      }
     }
 
     if (result !== undefined) files[rel] = result;
@@ -470,6 +480,67 @@ function filesToIndex(files) {
 }
 
 /**
+ * Writes the merge commit of two diverged commits. Only objects are written, never
+ * the working tree. Deterministic and symmetric: any device merging the same pair
+ * (in either order) writes the same commit.
+ */
+function writeMerge(repoRoot, ours, theirs) {
+  const baseHash = findMergeBase(repoRoot, ours, theirs);
+  const ourCommit = readCommit(repoRoot, ours);
+  const theirCommit = readCommit(repoRoot, theirs);
+  const oursWins =
+    ourCommit.author.timestamp !== theirCommit.author.timestamp
+      ? ourCommit.author.timestamp > theirCommit.author.timestamp
+      : ours > theirs;
+
+  // Marker labels come from the commits themselves, so every device writes the same text.
+  const deviceOf = ({ author }) => (author.name === 'mysync' ? undefined : author.name);
+  const names = {
+    older: deviceOf(oursWins ? theirCommit : ourCommit),
+    newer: deviceOf(oursWins ? ourCommit : theirCommit),
+  };
+  const mergeText = (...blobs) => {
+    const [base, older, newer] = blobs.map((hash) => (hash ? decodeText(readBlob(repoRoot, hash)) : ''));
+    if (base === null || older === null || newer === null) return null;
+    const { text, conflicted } = merge3(base, older, newer, names);
+    return { hash: writeBlob(repoRoot, Buffer.from(text, 'utf8')), conflicted };
+  };
+
+  const { files, conflicts } = mergeFileMaps(
+    commitFiles(repoRoot, baseHash),
+    commitFiles(repoRoot, ours),
+    commitFiles(repoRoot, theirs),
+    oursWins,
+    mergeText,
+  );
+
+  const parents = [ours, theirs].sort();
+  const commitHash = writeCommit(repoRoot, {
+    treeHash: buildTreeFromIndex(repoRoot, filesToIndex(files)),
+    parentHashes: parents,
+    author: {
+      name: 'mysync',
+      email: 'merge@mysync.local',
+      timestamp: Math.max(ourCommit.author.timestamp, theirCommit.author.timestamp),
+    },
+    message: `merge ${parents[0].slice(0, 7)} and ${parents[1].slice(0, 7)}`,
+  });
+  return { commitHash, files, conflicts };
+}
+
+/**
+ * The commit that combines `a` and `b` without touching the working tree: one of them
+ * when it already contains the other, else their merge commit. All objects must be local.
+ * @returns {{ commitHash: string, conflicts: string[] }}
+ */
+export function mergeCommits(repoRoot, a, b) {
+  if (!a || a === b || isAncestor(repoRoot, a, b)) return { commitHash: b, conflicts: [] };
+  if (!b || isAncestor(repoRoot, b, a)) return { commitHash: a, conflicts: [] };
+  const { commitHash, conflicts } = writeMerge(repoRoot, a, b);
+  return { commitHash, conflicts };
+}
+
+/**
  * Brings `theirHash` into the current branch: fast-forward when possible,
  * otherwise a deterministic merge commit. All objects must already be local.
  * @returns {Promise<{ action: 'up-to-date'|'fast-forward'|'merged', conflicts: string[], commitHash: string }>}
@@ -489,33 +560,7 @@ export function integrate(repoRoot, theirHash) {
       return { action: 'fast-forward', conflicts: [], commitHash: theirHash };
     }
 
-    const baseHash = findMergeBase(repoRoot, ours, theirHash);
-    const ourCommit = readCommit(repoRoot, ours);
-    const theirCommit = readCommit(repoRoot, theirHash);
-    const oursWins =
-      ourCommit.author.timestamp !== theirCommit.author.timestamp
-        ? ourCommit.author.timestamp > theirCommit.author.timestamp
-        : ours > theirHash;
-
-    const { files, conflicts } = mergeFileMaps(
-      commitFiles(repoRoot, baseHash),
-      commitFiles(repoRoot, ours),
-      commitFiles(repoRoot, theirHash),
-      oursWins,
-    );
-
-    const parents = [ours, theirHash].sort();
-    const mergeHash = writeCommit(repoRoot, {
-      treeHash: buildTreeFromIndex(repoRoot, filesToIndex(files)),
-      parentHashes: parents,
-      author: {
-        name: 'mysync',
-        email: 'merge@mysync.local',
-        timestamp: Math.max(ourCommit.author.timestamp, theirCommit.author.timestamp),
-      },
-      message: `merge ${parents[0].slice(0, 7)} and ${parents[1].slice(0, 7)}`,
-    });
-
+    const { commitHash: mergeHash, files, conflicts } = writeMerge(repoRoot, ours, theirHash);
     moveHeadTo(repoRoot, mergeHash, files);
     return { action: 'merged', conflicts, commitHash: mergeHash };
   });

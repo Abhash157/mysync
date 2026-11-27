@@ -84,7 +84,7 @@
     const peers = s.peers.length
       ? `<div class="devs">${s.peers.map((p) => `<div><span class="dot ${p.online ? 'ok' : 'warn'}"></span>${esc(p.label || p.name)}<small>${p.online ? 'online' : esc(p.error || 'not reachable')}</small></div>`).join('')}</div>`
       : '';
-    const conflicts = s.conflicts.length ? `<p class="warn">${s.conflicts.length} note${s.conflicts.length === 1 ? ' was' : 's were'} changed on two devices. Both copies are kept in your notes folder (look for “.conflict” in the name).</p>` : '';
+    const conflicts = s.conflicts.length ? `<p class="warn">${s.conflicts.length} note${s.conflicts.length === 1 ? ' was' : 's were'} changed on two devices. Open the note to choose which lines to keep.</p>` : '';
     const skipped = s.skipped.length ? `<p class="muted">${s.skipped.length} large file${s.skipped.length === 1 ? ' is' : 's are'} not synced (over 100 MB).</p>` : '';
     return `<div class="status"><span class="dot ${DOT[s.state] ?? ''}"></span>${esc(SHORT[s.state] || s.state)}</div>${detail(s)}${peers}${conflicts}${skipped}`;
   }

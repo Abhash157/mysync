@@ -14,9 +14,12 @@
     <button data-i="files" data-act="files" title="Files (Ctrl+\)"></button>
     <button data-i="search" data-act="search" title="Search (Ctrl+Shift+F)"></button>
     <button data-i="filePlus" data-act="new" title="New note (Ctrl+N)"></button>
+    <button data-i="outline" data-act="outline" title="Outline and backlinks"></button>
+    <button data-i="command" data-act="palette" title="Commands (Ctrl+P)"></button>
     <span class="grow"></span>
     <button id="syncRibbon" data-i="cloud" data-act="sync" title="Sync"></button>
     <button data-i="swap" data-act="vault" title="Change notes folder"></button>
+    <button data-i="update" data-act="update" title="Check for updates"></button>
   </nav>
 
   <aside id="side">
@@ -33,6 +36,10 @@
       <div class="bar"><input id="q" placeholder="Search notes…" spellcheck="false"></div>
       <div id="results"></div>
     </div>
+    <div id="outlinePanel" class="panel" hidden>
+      <div class="bar"><span>Outline</span></div>
+      <div id="outline"></div>
+    </div>
   </aside>
   <div id="resizer"></div>
 
@@ -41,7 +48,8 @@
     <section id="pane">
       <div id="page" hidden>
         <input id="title" spellcheck="false" autocomplete="off">
-        <textarea id="ed" spellcheck="false"></textarea>
+        <div id="ed"></div>
+        <div id="merge" hidden></div>
         <div id="view" hidden></div>
       </div>
       <div id="empty">
@@ -50,7 +58,7 @@
         <p><kbd>Ctrl</kbd> <kbd>O</kbd> open a note</p>
       </div>
     </section>
-    <footer id="status"><button id="syncBtn" data-act="sync" title="Sync settings"></button><span id="stats"></span><button id="mode" title="Toggle edit / reading (Ctrl+E)"></button></footer>
+    <footer id="status"><button id="syncBtn" data-act="sync" title="Sync settings"></button><span id="stats"></span><button id="previewBtn" title="Formatted or plain markdown while editing (Ctrl+Shift+E)" hidden></button><button id="mode" title="Toggle edit / reading (Ctrl+E)"></button></footer>
   </main>
 </div>
 <div id="modal" hidden><div id="box"><input id="mq" placeholder="Find or create a note…" spellcheck="false"><div id="mlist"></div></div></div>
@@ -59,6 +67,9 @@
 <div id="pair" hidden></div>
 <div id="toast" hidden></div>
 <script src="md.js"></script>
+<script src="conflict.js"></script>
+<script src="blocks.js"></script>
+<script src="editor.bundle.js"></script>
 <script src="app.js"></script>
 <script src="sync.js"></script>
 </body>

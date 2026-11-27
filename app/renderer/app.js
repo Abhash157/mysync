@@ -110,7 +110,7 @@ function describe(f) {
         tone: 'ok',
         icon: 'check',
         title: 'Up to date',
-        sub: `${online} of ${plural(f.peers.length, 'device')} reachable${f.lastChangeAt ? `. Last change ${ago(f.lastChangeAt)}` : ''}`,
+        sub: `${online} of ${plural(f.peers.length, f.peers.some((p) => p.kind === 'cloud') ? 'connection' : 'device')} reachable${f.lastChangeAt ? `. Last change ${ago(f.lastChangeAt)}` : ''}`,
       };
     case 'syncing':
       return { tone: 'busy', icon: 'sync', title: f.message.startsWith('Connecting') ? 'Connecting...' : 'Syncing...', sub: 'Your changes are being exchanged.' };
@@ -188,7 +188,10 @@ function welcomeHtml() {
     </div>`;
 }
 
-function deviceRow(p) {
+const cloudIdOf = (peerName) => String(peerName).replace(/^cloud-/, '');
+
+function deviceRow(p, f) {
+  if (p.kind === 'cloud') return cloudRow(p, f);
   const internet = p.kind === 'internet';
   let chip = '<span class="chip">Connecting...</span>';
   if (p.online === true) chip = '<span class="chip ok">Online</span>';
@@ -199,6 +202,21 @@ function deviceRow(p) {
       <div class="row-icon">${icon(internet ? 'cloud' : 'monitor')}</div>
       <div class="grow"><div class="title">${esc(internet ? 'Internet server' : p.label)}</div><div class="sub">${esc(sub)}</div></div>
       ${chip}
+    </div>`;
+}
+
+function cloudRow(p, f) {
+  const account = state.cloud.accounts.find((a) => a.id === cloudIdOf(p.name));
+  let chip = '<span class="chip">Connecting...</span>';
+  if (p.online === true) chip = '<span class="chip ok">Connected</span>';
+  else if (p.online === false) chip = '<span class="chip warn">Not reachable</span>';
+  const sub = p.online === false && p.error ? p.error : `Cloud storage${account?.detail ? ` · ${account.detail}` : ''}`;
+  return `
+    <div class="row">
+      <div class="row-icon">${icon('cloud')}</div>
+      <div class="grow"><div class="title">${esc(p.label)}</div><div class="sub">${esc(sub)}</div></div>
+      ${chip}
+      <button class="btn ghost" data-action="cloud-unlink" data-root="${esc(f.root)}" data-id="${esc(cloudIdOf(p.name))}" title="Stop keeping this folder in ${esc(p.label)}">Disconnect</button>
     </div>`;
 }
 
@@ -239,7 +257,7 @@ function folderHtml(f) {
         conflicts.length
           ? `<section class="notice">${icon('alert')}<div class="grow">
           <h3>${plural(f.conflicts.length, 'file')} changed on two devices</h3>
-          <p>MySync kept both versions. The newest one keeps its name and the other sits beside it as “name.conflict-…”.</p>
+          <p>Both versions were kept. In text files they are inside the file, between &lt;&lt;&lt;&lt;&lt;&lt;&lt; and &gt;&gt;&gt;&gt;&gt;&gt;&gt; lines. For other files the older one sits beside it as “name.conflict-…”.</p>
           <ul>${conflicts
             .map(
               (c) => `<li><span class="file">${esc(c.path)}</span><button class="btn" data-action="reveal" data-root="${esc(f.root)}" data-rel="${esc(c.path)}">Show in folder</button></li>`,
@@ -268,7 +286,7 @@ function folderHtml(f) {
         <h2>Devices</h2>
         ${
           f.peers.length
-            ? `<div class="rows">${f.peers.map(deviceRow).join('')}</div>`
+            ? `<div class="rows">${f.peers.map((p) => deviceRow(p, f)).join('')}</div>`
             : `<p class="empty">No other devices yet. Choose “Add another device” to get an invite code.</p>`
         }
       </section>
@@ -324,6 +342,22 @@ function settingsHtml() {
             <button class="btn primary" data-action="hub-save">Save</button>
             <span class="inline-result" id="hub-result" role="status"></span>
           </div>
+        </section>
+
+        <section class="card">
+          <h2>Cloud storage <span class="chip ml">optional</span></h2>
+          <p class="hint mb14">Sync through storage you already have: Google Drive, OneDrive, MEGA, Dropbox, Nextcloud and more. Your devices stay in sync even when they are never on at the same time, with no server to run.</p>
+          ${
+            state.cloud.accounts.length
+              ? `<div class="rows mb14">${state.cloud.accounts
+                  .map(
+                    (a) => `<div class="row"><div class="row-icon">${icon('cloud')}</div><div class="grow"><div class="title">${esc(a.label)}</div><div class="sub">${esc(a.detail || a.providerLabel)}</div></div>
+                    <button class="btn ghost" data-action="cloud-remove" data-id="${esc(a.id)}">Remove</button></div>`,
+                  )
+                  .join('')}</div>`
+              : ''
+          }
+          <div class="form-row"><button class="btn primary" data-action="cloud-add">${icon('plus')} Connect cloud storage</button></div>
         </section>
 
         <section class="card">
@@ -449,7 +483,34 @@ async function addFlow() {
   }
 }
 
-function shareHtml(f, code, { fresh = false, busy = false, error = '' } = {}) {
+function shareCloudHtml(f, { busy = false, error = '' } = {}) {
+  const linked = f.peers.filter((p) => p.kind === 'cloud');
+  const free = state.cloud.accounts.filter((a) => !linked.some((p) => cloudIdOf(p.name) === a.id));
+  const already = linked.length
+    ? `<div class="callout info">${icon('cloud')}<span>Also kept in <b>${esc(linked.map((p) => p.label).join(', '))}</b>. On another device, connect the same cloud storage, then choose <b>Join a folder</b> and <b>From cloud storage</b>.</span></div>`
+    : '';
+  if (!state.cloud.accounts.length) {
+    return `<div class="callout info">${icon('cloud')}<span>Use Google Drive, OneDrive, MEGA or Dropbox so devices can sync without being on at the same time. <button class="link-btn accent" data-action="go-settings">Connect cloud storage</button></span></div>`;
+  }
+  if (!free.length) return already;
+  const suggestion = f.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const dis = busy ? 'disabled' : '';
+  return `
+    ${already}
+    <div class="divider"></div>
+    <div class="field flush">
+      <label for="cloud-acct">Also keep it in your cloud storage</label>
+      <div class="input-row">
+        <select class="input" id="cloud-acct" ${dis}>${free.map((a) => `<option value="${esc(a.id)}">${esc(a.label)}${a.detail ? ` (${esc(a.detail)})` : ''}</option>`).join('')}</select>
+        <input class="input" id="cloud-name" maxlength="63" value="${esc(suggestion)}" aria-label="Name in the cloud" ${dis}>
+        <button class="btn" data-action="cloud-link" data-root="${esc(f.root)}" ${dis}>${busy ? '<span class="spinner"></span>' : icon('cloud')} Keep in cloud</button>
+      </div>
+      <span class="note">Stored in a “MySync” folder there. The first upload runs in the background.</span>
+      ${error ? `<span class="inline-result err" role="alert">${esc(error)}</span>` : ''}
+    </div>`;
+}
+
+function shareHtml(f, code, { fresh = false, busy = false, error = '', cloudBusy = false, cloudError = '' } = {}) {
   let internet;
   if (f.hub) {
     internet = `<div class="callout info">${icon('cloud')}<span>This folder is also available over the internet as <b>${esc(f.hub.workspace)}</b>, so devices on other networks can join too.</span></div>`;
@@ -477,6 +538,7 @@ function shareHtml(f, code, { fresh = false, busy = false, error = '' } = {}) {
     <div class="code-box"><code id="invite-code">${esc(code)}</code><button class="btn primary" data-action="copy-code">${icon('copy')} Copy</button></div>
     <div class="callout">${icon('shield')}<span>Anyone with this code can read and change this folder. Only share it with your own devices or people you trust.</span></div>
     ${internet}
+    ${shareCloudHtml(f, { busy: cloudBusy, error: cloudError })}
     <div class="actions"><button class="btn primary" data-action="dlg-no" autofocus>Done</button></div>`;
 }
 
@@ -527,6 +589,7 @@ function joinHtml({ code = '', preview = '', dest, busy = false, error = '' }) {
       <span class="dest">If the folder already has files, they are kept and merged with the synced ones.</span>
     </div>
     ${error ? `<div class="callout" role="alert">${icon('alert')}<span>${esc(error)}</span></div>` : ''}
+    ${state.cloud.accounts.length ? `<div class="callout info">${icon('cloud')}<span>No code? Get a folder you keep in your cloud storage: <button class="link-btn accent" data-action="cloud-join" ${busy ? 'disabled' : ''}>From cloud storage</button></span></div>` : ''}
     <div class="actions">
       <button class="btn" data-action="dlg-no" ${busy ? 'disabled' : ''}>Cancel</button>
       <button class="btn primary" data-action="do-join" ${busy ? 'disabled' : ''}>${busy ? '<span class="spinner"></span> Connecting...' : 'Join folder'}</button>
@@ -581,6 +644,276 @@ async function doJoin() {
     toast(`Joined “${snap.name}”. Files will appear in a moment.`, 'ok');
   } catch (err) {
     showDialog(joinHtml({ code, dest: joinDraft.dest, error: err.message }));
+  }
+}
+
+// ---- cloud storage ----
+
+const PROVIDERS = [
+  { id: 'gdrive', title: 'Google Drive', sub: 'Sign in with your Google account' },
+  { id: 'onedrive', title: 'OneDrive', sub: 'Sign in with your Microsoft account' },
+  { id: 'mega', title: 'MEGA', sub: 'Your MEGA email and password' },
+  { id: 'webdav', title: 'Nextcloud / WebDAV', sub: 'Nextcloud, ownCloud, pCloud, Box, Koofr, a NAS...' },
+];
+
+function cloudAddHtml({ error = '' } = {}) {
+  const detected = state.cloud.detected;
+  return `
+    <h2>Connect cloud storage</h2>
+    ${
+      detected.length
+        ? `<p class="hint">Found on this PC. The quickest option: your cloud app does the uploading.</p>
+      <div class="rows">${detected
+        .map(
+          (d) => `<div class="row"><div class="row-icon">${icon('folder')}</div><div class="grow"><div class="title">${esc(d.label)}</div><div class="sub">${esc(d.path)}</div></div>
+          <button class="btn primary" data-action="cloud-use-folder" data-path="${esc(d.path)}">Use</button></div>`,
+        )
+        .join('')}</div>`
+        : ''
+    }
+    <p class="hint">${detected.length ? 'Or connect directly:' : 'Choose where to keep your folders:'}</p>
+    <div class="rows">
+      ${PROVIDERS.map(
+        (p) => `<div class="row"><div class="row-icon">${icon('cloud')}</div><div class="grow"><div class="title">${esc(p.title)}</div><div class="sub">${esc(p.sub)}</div></div>
+        <button class="btn" data-action="cloud-provider" data-provider="${p.id}">Connect</button></div>`,
+      ).join('')}
+      <div class="row"><div class="row-icon">${icon('folder')}</div><div class="grow"><div class="title">Another folder</div><div class="sub">Any folder your cloud app (Dropbox, iCloud, MEGA...) keeps in sync</div></div>
+        <button class="btn" data-action="cloud-pick-folder">Choose...</button></div>
+    </div>
+    ${error ? `<div class="callout" role="alert">${icon('alert')}<span>${esc(error)}</span></div>` : ''}
+    <div class="actions"><button class="btn" data-action="dlg-no">Close</button></div>`;
+}
+
+function cloudFormHtml(provider, { busy = false, error = '', values = {} } = {}) {
+  const dis = busy ? 'disabled' : '';
+  const field = (id, label, type = 'text', placeholder = '') =>
+    `<div class="field flush"><label for="${id}">${label}</label><input class="input" id="${id}" type="${type}" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(values[id] || '')}" ${dis}></div>`;
+  let title;
+  let fields;
+  let note;
+  if (provider === 'mega') {
+    title = 'Connect MEGA';
+    fields = field('cf-email', 'Email', 'email') + field('cf-pass', 'Password', 'password');
+    note = 'Saved on this PC only, in your user profile. Accounts with two-step login are not supported yet: use the MEGA desktop app’s folder instead.';
+  } else if (provider === 'webdav') {
+    title = 'Connect Nextcloud or WebDAV';
+    fields = field('cf-url', 'WebDAV address', 'url', 'https://cloud.example.com/remote.php/dav/files/you') + field('cf-user', 'User name') + field('cf-pass', 'Password or app password', 'password');
+    note = 'Find the address in your service’s settings (Nextcloud: Files, then Settings, then WebDAV). An app password is safer than your main one.';
+  } else {
+    const name = provider === 'gdrive' ? 'Google Drive' : 'OneDrive';
+    title = `Set up ${name} sign-in`;
+    fields = field('cf-client', 'App (client) ID') + (provider === 'gdrive' ? field('cf-secret', 'Client secret', 'password') : '');
+    note =
+      provider === 'gdrive'
+        ? 'This copy of MySync has no Google app ID yet. Create a “Desktop app” OAuth client in Google Cloud Console (with the Google Drive API turned on) and paste its ID and secret here. You only do this once.'
+        : 'This copy of MySync has no Microsoft app ID yet. Register an app in the Azure portal (platform “Mobile and desktop applications”, redirect URI http://localhost) and paste its Application (client) ID here. You only do this once.';
+  }
+  return `
+    <h2>${esc(title)}</h2>
+    ${fields}
+    <p class="hint">${esc(note)}</p>
+    ${error ? `<div class="callout" role="alert">${icon('alert')}<span>${esc(error)}</span></div>` : ''}
+    <div class="actions">
+      <button class="btn" data-action="cloud-add" ${dis}>Back</button>
+      <button class="btn primary" data-action="cloud-submit" data-provider="${provider}" ${dis}>${busy ? '<span class="spinner"></span> Connecting...' : 'Connect'}</button>
+    </div>`;
+}
+
+function readForm() {
+  const values = {};
+  for (const el of dialog.querySelectorAll('input[id^="cf-"]')) values[el.id] = el.value;
+  return values;
+}
+
+async function cloudAddFlow(error = '') {
+  try {
+    await api('cloud:refresh');
+    await refreshState();
+  } catch { /* show what we have */ }
+  showDialog(cloudAddHtml({ error }));
+}
+
+function cloudConnected(account) {
+  closeDialog();
+  refreshState().then(renderAll);
+  toast(`Connected ${account.label}${account.detail ? ` (${account.detail})` : ''}`, 'ok');
+}
+
+async function cloudUseFolder(dir) {
+  try {
+    cloudConnected(await api('cloud:add-folder', { path: dir }));
+  } catch (err) {
+    showDialog(cloudAddHtml({ error: err.message }));
+  }
+}
+
+async function cloudSignIn(provider) {
+  const name = provider === 'gdrive' ? 'Google Drive' : 'OneDrive';
+  if (!state.cloud.apps?.[provider]) return showDialog(cloudFormHtml(provider));
+  dialog.dataset.locked = '1';
+  showDialog(`
+    <h2>Sign in to ${esc(name)}</h2>
+    <p>Your browser opened ${esc(name)}’s sign-in page. Sign in there and allow MySync, then come back here.</p>
+    <div class="callout info">${icon('shield')}<span>MySync only asks for its own folder, so it cannot see the rest of your files.</span></div>
+    <div class="actions"><span class="spinner"></span><button class="btn" data-action="cloud-signin-cancel">Cancel</button></div>`);
+  try {
+    const account = await api('cloud:signin', { provider });
+    delete dialog.dataset.locked;
+    cloudConnected(account);
+  } catch (err) {
+    delete dialog.dataset.locked;
+    showDialog(cloudAddHtml({ error: err.message }));
+  }
+}
+
+async function cloudSubmit(provider) {
+  const values = readForm();
+  showDialog(cloudFormHtml(provider, { busy: true, values }));
+  try {
+    if (provider === 'mega') {
+      cloudConnected(await api('cloud:add-mega', { email: values['cf-email'], password: values['cf-pass'] }));
+    } else if (provider === 'webdav') {
+      cloudConnected(await api('cloud:add-webdav', { url: values['cf-url'], username: values['cf-user'], password: values['cf-pass'] }));
+    } else {
+      if (!values['cf-client']?.trim()) throw new Error('Paste the app ID first.');
+      await api('cloud:app', { provider, clientId: values['cf-client'], clientSecret: values['cf-secret'] });
+      await refreshState();
+      await cloudSignIn(provider);
+    }
+  } catch (err) {
+    showDialog(cloudFormHtml(provider, { error: err.message, values }));
+  }
+}
+
+async function cloudRemoveFlow(id) {
+  const account = state.cloud.accounts.find((a) => a.id === id);
+  if (!account) return;
+  const answer = await confirmDialog({
+    title: `Remove ${account.label}?`,
+    body: 'Folders stop syncing through it on this PC. Nothing is deleted, here or in the cloud, and your other devices are not affected.',
+    confirm: 'Remove',
+    danger: true,
+  });
+  if (!answer.ok) return;
+  try {
+    await api('cloud:remove', { id });
+    await refreshState();
+    renderAll();
+    toast(`Removed ${account.label}`);
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function cloudLinkFlow(root) {
+  const id = $('#cloud-acct')?.value;
+  const name = $('#cloud-name')?.value.trim();
+  const code = $('#invite-code')?.textContent || '';
+  const f = folderBy(root);
+  showDialog(shareHtml(f, code, { cloudBusy: true }));
+  try {
+    await api('cloud:link', { root, id, name });
+    await refreshState();
+    renderAll();
+    showDialog(shareHtml(folderBy(root), code));
+    toast('This folder is now kept in your cloud storage too', 'ok');
+  } catch (err) {
+    showDialog(shareHtml(f, code, { cloudError: err.message }));
+    if ($('#cloud-acct')) $('#cloud-acct').value = id;
+    if ($('#cloud-name')) $('#cloud-name').value = name;
+  }
+}
+
+async function cloudUnlinkFlow(root, id) {
+  const label = state.cloud.accounts.find((a) => a.id === id)?.label || 'cloud storage';
+  const answer = await confirmDialog({
+    title: `Stop keeping this folder in ${label}?`,
+    body: `This PC stops syncing it through ${esc(label)}. Your files and the copy in the cloud stay where they are.`,
+    confirm: 'Disconnect',
+    danger: true,
+  });
+  if (!answer.ok) return;
+  try {
+    await api('cloud:unlink', { root, id });
+    await refreshState();
+    renderAll();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+let cloudJoinDraft = null;
+
+function cloudJoinHtml({ busy = false, error = '' } = {}) {
+  const d = cloudJoinDraft;
+  const dis = busy ? 'disabled' : '';
+  let list;
+  if (d.loading) list = '<p class="hint"><span class="spinner"></span> Looking...</p>';
+  else if (d.listError) list = `<div class="callout" role="alert">${icon('alert')}<span>${esc(d.listError)}</span></div>`;
+  else if (!d.workspaces.length) list = '<p class="empty">No folders to join there yet. On the device that has the folder, choose “Add another device”, then “Keep in cloud”.</p>';
+  else {
+    list = `<div class="rows">${d.workspaces
+      .map(
+        (w) => `<label class="row"><input type="radio" name="cloud-ws" value="${esc(w.name)}" ${d.name === w.name ? 'checked' : ''} ${dis}>
+        <div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${esc(w.devices.length ? `From ${w.devices.map((x) => x.device).join(', ')}` : 'No devices yet')}${w.updatedAt ? ` · changed ${esc(ago(w.updatedAt))}` : ''}</div></div></label>`,
+      )
+      .join('')}</div>`;
+  }
+  return `
+    <h2>Join from cloud storage</h2>
+    <div class="field flush">
+      <label for="cj-acct">Cloud storage</label>
+      <select class="input" id="cj-acct" data-change="cloud-join-acct" ${dis}>${state.cloud.accounts.map((a) => `<option value="${esc(a.id)}" ${a.id === d.id ? 'selected' : ''}>${esc(a.label)}${a.detail ? ` (${esc(a.detail)})` : ''}</option>`).join('')}</select>
+    </div>
+    ${list}
+    <div class="field flush">
+      <label>Save it in</label>
+      <div class="input-row"><input class="input" id="join-dest" readonly value="${esc(d.dest)}"><button class="btn" data-action="cloud-join-dest" ${dis}>Change...</button></div>
+      <span class="dest">If the folder already has files, they are kept and merged with the synced ones.</span>
+    </div>
+    ${error ? `<div class="callout" role="alert">${icon('alert')}<span>${esc(error)}</span></div>` : ''}
+    <div class="actions">
+      <button class="btn" data-action="dlg-no" ${dis}>Cancel</button>
+      <button class="btn primary" data-action="cloud-do-join" ${busy || !d.name ? 'disabled' : ''}>${busy ? '<span class="spinner"></span> Joining...' : 'Join folder'}</button>
+    </div>`;
+}
+
+async function cloudJoinLoad(id) {
+  cloudJoinDraft = { ...cloudJoinDraft, id, loading: true, listError: '', workspaces: [], name: null };
+  showDialog(cloudJoinHtml());
+  try {
+    const workspaces = await api('cloud:workspaces', { id });
+    if (cloudJoinDraft.id !== id) return;
+    // Folders already synced on this PC are not offered again.
+    const local = new Set(state.folders.map((f) => f.folderId).filter(Boolean));
+    cloudJoinDraft.workspaces = workspaces.filter((w) => !local.has(w.folderId));
+    cloudJoinDraft.name = cloudJoinDraft.workspaces[0]?.name || null;
+    if (!cloudJoinDraft.custom) cloudJoinDraft.dest = defaultDest(cloudJoinDraft.name);
+  } catch (err) {
+    cloudJoinDraft.listError = err.message;
+  }
+  cloudJoinDraft.loading = false;
+  showDialog(cloudJoinHtml());
+}
+
+function cloudJoinFlow() {
+  cloudJoinDraft = { id: state.cloud.accounts[0]?.id, workspaces: [], name: null, dest: defaultDest(null), custom: false };
+  cloudJoinLoad(cloudJoinDraft.id);
+}
+
+async function cloudDoJoin() {
+  const d = cloudJoinDraft;
+  if (!d.name) return;
+  showDialog(cloudJoinHtml({ busy: true }));
+  try {
+    const snap = await api('cloud:join', { id: d.id, name: d.name, dest: d.dest });
+    closeDialog();
+    await refreshState();
+    view = { name: 'folder', root: snap.root };
+    renderAll();
+    toast(`Joined “${snap.name}”. Files will appear in a moment.`, 'ok');
+  } catch (err) {
+    showDialog(cloudJoinHtml({ error: err.message }));
   }
 }
 
@@ -694,6 +1027,28 @@ const actions = {
     }
   },
   'open-logs': () => api('app:logs').catch(() => {}),
+  'cloud-add': () => cloudAddFlow(),
+  'cloud-use-folder': ({ path }) => cloudUseFolder(path),
+  'cloud-pick-folder': async () => {
+    const picked = await api('folder:pick', { title: 'Choose a folder your cloud app keeps in sync' }).catch(() => null);
+    if (picked) cloudUseFolder(picked);
+  },
+  'cloud-provider': ({ provider }) => (provider === 'gdrive' || provider === 'onedrive' ? cloudSignIn(provider) : showDialog(cloudFormHtml(provider))),
+  'cloud-submit': ({ provider }) => cloudSubmit(provider),
+  'cloud-signin-cancel': () => api('cloud:signin-cancel').catch(() => {}),
+  'cloud-remove': ({ id }) => cloudRemoveFlow(id),
+  'cloud-link': ({ root }) => cloudLinkFlow(root),
+  'cloud-unlink': ({ root, id }) => cloudUnlinkFlow(root, id),
+  'cloud-join': () => cloudJoinFlow(),
+  'cloud-join-dest': async () => {
+    const picked = await api('folder:pick', { title: 'Where should this folder be saved?', defaultPath: state.defaultJoinBase }).catch(() => null);
+    if (picked) {
+      cloudJoinDraft.dest = picked;
+      cloudJoinDraft.custom = true;
+      $('#join-dest').value = picked;
+    }
+  },
+  'cloud-do-join': () => cloudDoJoin(),
 };
 
 document.addEventListener('click', (event) => {
@@ -704,6 +1059,12 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('change', async (event) => {
+  if (event.target.dataset.change === 'cloud-join-acct') return cloudJoinLoad(event.target.value);
+  if (event.target.name === 'cloud-ws' && cloudJoinDraft) {
+    cloudJoinDraft.name = event.target.value;
+    if (!cloudJoinDraft.custom) cloudJoinDraft.dest = defaultDest(cloudJoinDraft.name);
+    return showDialog(cloudJoinHtml());
+  }
   if (event.target.dataset.change === 'autostart') {
     try {
       await api('settings:save', { autoStart: event.target.checked });

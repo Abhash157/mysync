@@ -79,13 +79,13 @@ try {
   daemon(dirA, 3041);
   daemon(dirB, 3042);
   await until(() => exists(dirA, 'extra.txt'), 'merge propagated');
-  await until(() => {
-    const a = fs.readdirSync(dirA).filter((f) => f.startsWith('notes.conflict-')).sort();
-    const b = fs.readdirSync(dirB).filter((f) => f.startsWith('notes.conflict-')).sort();
-    return a.length === 1 && a.join() === b.join() && read(dirA, 'notes.txt') === read(dirB, 'notes.txt');
-  }, 'identical conflict result on both devices');
-  const texts = [read(dirA, 'notes.txt'), read(dirA, fs.readdirSync(dirA).find((f) => f.startsWith('notes.conflict-')))].sort();
-  assert.deepStrictEqual(texts, ['A offline edit\n', 'B offline edit\n'], 'no data lost');
+  await until(
+    () => read(dirA, 'notes.txt').startsWith('<<<<<<<') && read(dirA, 'notes.txt') === read(dirB, 'notes.txt'),
+    'identical conflict result on both devices',
+  );
+  const lines = read(dirA, 'notes.txt').split('\n');
+  assert.deepStrictEqual([lines[1], lines[3]].sort(), ['A offline edit', 'B offline edit'], 'no data lost');
+  assert(!fs.readdirSync(dirA).some((f) => f.includes('.conflict-')), 'no separate copy for text files');
 
   console.log('6. A third device joins later and gets everything...');
   cli(['join', 'http://127.0.0.1:3042', '--token', JSON.parse(read(dirB, '.mysync/config.json')).token], dirC);

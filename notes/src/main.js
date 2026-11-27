@@ -1,9 +1,11 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, clipboard, Notification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, clipboard, Notification, net } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HostClient } from '../host/host-client.js';
+import { fold, COPY } from './fold.js';
+import { newer, RELEASES } from './update.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fsp = fs.promises;
@@ -38,9 +40,23 @@ Notes are plain markdown files in this folder. Edit them anywhere.
 - **Ctrl+N** new note, **Ctrl+O** open a note, **Ctrl+E** switch edit / reading view
 - **Ctrl+Shift+F** search all notes, **Ctrl+L** turn a line into a to-do
 
+- **Ctrl+P** all commands: tables, lists, callouts and more
+- **Ctrl+Shift+E** switch between formatted and plain markdown
+
+## Table
+
+| Key       | Inside a table |
+| --------- | -------------- |
+| Tab       | Next cell      |
+| Enter     | Next row       |
+| Click     | Edit any cell  |
+
+> [!tip] Callout
+> You can ==highlight== text and add #tags.
+
 ## To-do
 
-- [ ] Try ticking this box in reading view
+- [ ] Try ticking this box
 - [ ] Press Enter after a to-do to get the next one
 - [x] Install MyNotes
 
@@ -80,6 +96,33 @@ async function walk(dir, rel = '') {
   return out;
 }
 
+// Folds "name.conflict-<hash>.md" files left by older versions back into "name.md".
+// The copies go to the Recycle Bin. A note that still has an unresolved block waits.
+async function foldCopies() {
+  const files = (await walk(vaultDir())).filter((f) => !f.d).map((f) => f.p);
+  const groups = new Map();
+  for (const p of files.sort()) {
+    const m = p.match(COPY);
+    const note = m && files.find((f) => f.toLowerCase() === `${m[1]}.md`.toLowerCase());
+    if (note) groups.set(note, [...(groups.get(note) || []), p]);
+  }
+  let count = 0;
+  for (const [note, copies] of groups) {
+    try {
+      const text = await fsp.readFile(abs(note), 'utf8');
+      if (/^<{7} .*\(mysync\)\r?$/m.test(text)) continue;
+      const next = fold(text, await Promise.all(copies.map((p) => fsp.readFile(abs(p), 'utf8'))));
+      if (next !== text) await fsp.writeFile(abs(note), next);
+      for (const p of copies) await shell.trashItem(abs(p));
+      count += copies.length;
+    } catch (err) {
+      console.error('could not fold conflict copies of', note, err.message);
+    }
+  }
+  return count;
+}
+let folding = null;
+
 function unique(dir, base, ext) {
   for (let i = 0; ; i++) {
     const name = base + (i ? ' ' + i : '');
@@ -90,6 +133,7 @@ function unique(dir, base, ext) {
 const handlers = {
   info: async () => ({ vault: vaultDir(), files: await walk(vaultDir()), session: cfg.session || {} }),
   list: () => walk(vaultDir()),
+  fold: () => (folding ??= foldCopies().finally(() => (folding = null))),
   read: (rel) => fsp.readFile(abs(rel), 'utf8'),
   write: (rel, text) => fsp.writeFile(abs(rel), String(text)),
 
@@ -164,6 +208,23 @@ const handlers = {
   session(s) { cfg.session = s; saveCfg(); },
   reveal(rel) { rel ? shell.showItemInFolder(abs(rel)) : shell.openPath(vaultDir()); },
   external(url) { if (/^(https?:|mailto:)/i.test(String(url))) shell.openExternal(url); },
+
+  async checkUpdate() {
+    let releases;
+    try {
+      const res = await net.fetch(RELEASES, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'MyNotes' }, signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+      releases = await res.json();
+    } catch (err) {
+      throw new Error(`Could not check for updates: ${err.message}`);
+    }
+    const current = app.getVersion();
+    const found = newer(releases, current);
+    if (!found) return `MyNotes ${current} is up to date`;
+    const { response } = await dialog.showMessageBox(win, { type: 'info', buttons: ['Open download page', 'Later'], defaultId: 0, cancelId: 1, message: `MyNotes ${found.version} is available.`, detail: `You have ${current}. Download the installer and run it; your notes stay where they are.` });
+    if (response === 0 && found.url.startsWith('https://github.com/')) shell.openExternal(found.url);
+    return `MyNotes ${found.version} is available`;
+  },
 };
 
 // ------------------------------------------------------------------ sync

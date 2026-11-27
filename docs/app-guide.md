@@ -39,6 +39,20 @@ The invite code works as a password: **anyone who has it can read and change tha
 - **Same network (home, office):** nothing to set up. Devices find each other automatically and send files straight to each other.
 - **Different places:** devices need a meeting point on the internet. Someone runs a MySync server (`mysync hub serve`, see the main [README](../README.md)), and you enter its address under **Settings → Internet sync**. After that, **Add another device** offers **Put online**, and the invite code works from anywhere.
 
+## Sync through Google Drive, OneDrive, MEGA or Dropbox
+
+Your devices can also meet in cloud storage you already have, so they stay in sync even if they are never switched on at the same time.
+
+1. Open **Settings → Cloud storage** and choose **Connect cloud storage**.
+2. Pick one:
+   - A **cloud folder found on this PC** (OneDrive, Dropbox, Google Drive for desktop, MEGA...). Quickest: the cloud app does the uploading.
+   - **Google Drive** or **OneDrive**: your browser opens to sign in. MySync only gets access to its own folder, never the rest of your files.
+   - **MEGA** (email and password) or **Nextcloud / WebDAV** (address, user name, app password).
+3. Open a folder, choose **Add another device**, and under **Also keep it in your cloud storage** choose **Keep in cloud**.
+4. On the other device, connect the same cloud storage, then choose **Join a folder → From cloud storage** and pick the folder.
+
+The folder then lists the cloud storage under **Devices**. **Disconnect** there stops this PC syncing through it; your files and the cloud copy stay where they are. Cloud storage is checked about every 20 seconds, so changes take a little longer than between devices on the same network.
+
 ## What the window tells you
 
 | You see | It means |
@@ -55,7 +69,12 @@ The icon in the Windows system tray (near the clock) shows the same thing for al
 
 ## If two devices change the same file
 
-You never lose work. MySync keeps both versions: the newest one keeps its name, and the other is saved beside it as, for example, `report.conflict-1a2b3c4.docx`. The window and a Windows notification tell you which file it was, and **Show in folder** opens it. Open both, keep what you want, and delete the other.
+You never lose work.
+
+- **Text files** (notes, code and so on): edits to different lines are combined. Where both edited the same lines, the file holds both, older first, between `<<<<<<<` and `>>>>>>>` lines. Editors such as VS Code colour these and offer buttons to pick one; otherwise delete what you do not want, including the marker lines.
+- **Other files** (such as Word documents): the newest version keeps its name, and the other is saved beside it as, for example, `report.conflict-1a2b3c4.docx`. Open both, keep what you want, and delete the other.
+
+The window and a Windows notification tell you which file it was, and **Show in folder** opens it.
 
 ## Pause, stop, or remove a folder
 
@@ -83,5 +102,6 @@ Open **Settings → About → Open log folder** and look at `mysync.log`; it is 
 ## Good to know
 
 - Only folders you choose are synced, and only to devices that have the invite code.
-- Files go directly between your devices, or through the server you set up. There is no MySync cloud.
+- Files go directly between your devices, through the server you set up, or through cloud storage you connect. There is no MySync cloud of its own.
+- In cloud storage, MySync keeps its own copy in a `MySync` folder. It holds MySync's packed history rather than ordinary files, so open your files from the synced folder on your PC, not from there.
 - This is an early version (0.1). Deleted files cannot be restored from inside the app yet, so keep your usual backups.

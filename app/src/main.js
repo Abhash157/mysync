@@ -25,6 +25,8 @@ let quitting = false;
 let hostStopped = false;
 let engine = { ready: false, port: null, error: null };
 let hub = null;
+let cloud = { accounts: [], detected: [], apps: {} };
+let signInId = null;
 let restarts = 0;
 let broadcastTimer = null;
 const snapshots = new Map();
@@ -90,6 +92,7 @@ function publicState() {
     onboarded: store.get('onboarded'),
     engine,
     hub,
+    cloud,
     settings: {
       deviceName: store.get('deviceName') || os.hostname(),
       autoStart: store.get('autoStart'),
@@ -159,6 +162,7 @@ async function bootEngine() {
   engine.port = started.port;
   for (const snap of await host.call('restore', { folders: store.get('folders') })) snapshots.set(snap.root, snap);
   hub = await host.call('getHub');
+  cloud = await host.call('cloudState');
   engine.ready = true;
   changed();
   setTimeout(() => { restarts = 0; }, 60_000).unref?.();
@@ -170,8 +174,8 @@ function notifyConflict({ root, name, files }) {
   if (now - (lastToast.get(root) || 0) < 30_000) return;
   lastToast.set(root, now);
   const note = new Notification({
-    title: 'Two versions of a file were kept',
-    body: `"${files[0]}" was changed on two devices in ${name}. You can find both copies in the folder.`,
+    title: 'A file has a conflict',
+    body: `"${files[0]}" was changed on two devices in ${name}. Both versions were kept.`,
     icon: path.join(BUILD, 'icon.png'),
   });
   note.on('click', () => {
@@ -426,6 +430,60 @@ function registerIpc() {
     return hub;
   });
   handle('hub:test', ({ url }) => engineCall('testHub', { url: String(url || '') }));
+
+  // Cloud storage. Account details stay in the engine; the window only sees names.
+  const refreshCloud = async () => {
+    cloud = await engineCall('cloudState');
+    changed();
+    return cloud;
+  };
+  const cloudChange = (cmd) => async (args) => {
+    const result = await engineCall(cmd, args);
+    await refreshCloud();
+    return result;
+  };
+  handle('cloud:refresh', () => refreshCloud());
+  handle('cloud:add-folder', cloudChange('cloudAddFolder'));
+  handle('cloud:add-webdav', ({ url, username, password }) =>
+    cloudChange('cloudAddWebdav')({ url: String(url || ''), username: String(username || ''), password: String(password || '') }));
+  handle('cloud:add-mega', ({ email, password }) => cloudChange('cloudAddMega')({ email: String(email || ''), password: String(password || '') }));
+  handle('cloud:app', ({ provider, clientId, clientSecret }) => cloudChange('setCloudApp')({ provider: String(provider), clientId, clientSecret }));
+  handle('cloud:signin', async ({ provider }) => {
+    const { id, url } = await engineCall('cloudSignInStart', { provider: String(provider) });
+    if (!/^https:\/\//.test(url) && !process.env.MYSYNC_APP_TEST) throw new Error('Unexpected sign-in address');
+    if (!process.env.MYSYNC_APP_TEST) await shell.openExternal(url);
+    signInId = id;
+    try {
+      const account = await host.call('cloudSignInWait', { id }, 6 * 60 * 1000);
+      await refreshCloud();
+      showWindow();
+      return account;
+    } finally {
+      if (signInId === id) signInId = null;
+    }
+  });
+  handle('cloud:signin-cancel', () => (signInId ? engineCall('cloudSignInCancel', { id: signInId }) : true));
+  handle('cloud:remove', cloudChange('cloudRemove'));
+  handle('cloud:workspaces', ({ id }) => engineCall('cloudWorkspaces', { id: String(id) }));
+  handle('cloud:link', async ({ root, id, name }) => {
+    const result = await engineCall('cloudLink', { root: knownRoot(root), id: String(id), name: String(name || '') });
+    snapshots.set(result.snapshot.root, result.snapshot);
+    changed();
+    return result;
+  });
+  handle('cloud:unlink', async ({ root, id }) => {
+    const snap = await engineCall('cloudUnlink', { root: knownRoot(root), id: String(id) });
+    snapshots.set(snap.root, snap);
+    changed();
+    return snap;
+  });
+  handle('cloud:join', async ({ id, name, dest }) => {
+    const snap = await engineCall('cloudJoin', { id: String(id), name: String(name), dest: path.resolve(String(dest)) });
+    store.addFolder(snap.root);
+    snapshots.set(snap.root, snap);
+    changed();
+    return snap;
+  });
   handle('app:logs', () => shell.openPath(logDir()));
   handle('onboarding:done', () => {
     store.set('onboarded', true);

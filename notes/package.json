@@ -1,7 +1,7 @@
 {
   "name": "mynotes",
   "productName": "MyNotes",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A tiny markdown notes app with to-do lists",
   "author": "Abhash Limbu",
   "private": true,
@@ -12,11 +12,15 @@
     "icons": "node scripts/make-icon.js",
     "pack": "node scripts/prepare.js && electron-builder --win --dir",
     "dist": "node scripts/prepare.js && electron-builder --win",
-    "test": "node scripts/prepare.js && node test/e2e.test.js && node test/sync.test.js"
+    "test": "node scripts/prepare.js && node test/blocks.test.js && node test/fold.test.js && node test/update.test.js && node test/e2e.test.js && node test/sync.test.js"
   },
   "devDependencies": {
+    "@codemirror/commands": "^6.11.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.44.2",
     "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "playwright-core": "^1.64.0"
   },
   "build": {

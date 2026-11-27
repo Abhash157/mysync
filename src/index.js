@@ -18,3 +18,5 @@ export * from './invite.js';
 export * from './global.js';
 export * from './agent.js';
 export * from './pairing.js';
+export * from './cloud.js';
+export { startOAuth } from './cloud-store.js';

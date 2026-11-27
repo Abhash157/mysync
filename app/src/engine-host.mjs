@@ -23,6 +23,14 @@ const emit = (event, data) => send({ event, data });
 
 let agent = null;
 let deviceName = 'My PC';
+const signIns = new Map();
+let signInSeq = 0;
+
+const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+function isInside(child, parent) {
+  const rel = path.relative(path.resolve(parent).toLowerCase(), path.resolve(child).toLowerCase());
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
 
 const userError = (message) => Object.assign(new Error(message), { code: 'EUSER' });
 
@@ -237,6 +245,105 @@ const handlers = {
     } catch (err) {
       return { ok: false, error: E.friendlyError(err) };
     }
+  },
+
+  // ---- cloud storage (Google Drive, OneDrive, MEGA, WebDAV, cloud-synced folders) ----
+
+  /** Connected accounts, cloud folders found on this PC, and which sign-ins have an app ID. */
+  cloudState() {
+    return {
+      accounts: E.listCloudAccounts(),
+      detected: E.detectCloudFolders().filter((d) => !E.listCloudAccounts().some((a) => a.path && samePath(a.path, d.path))),
+      apps: { gdrive: !!E.getCloudApp('gdrive').clientId, onedrive: !!E.getCloudApp('onedrive').clientId },
+    };
+  },
+
+  async cloudAddFolder({ path: dir }) {
+    const resolved = path.resolve(String(dir || ''));
+    // The cloud copy must not end up inside a synced folder, or a synced folder inside it.
+    for (const root of roots()) {
+      if (isInside(path.join(resolved, E.ROOT_FOLDER), root) || isInside(root, path.join(resolved, E.ROOT_FOLDER))) {
+        throw userError('That folder is inside a folder MySync is already syncing. Choose your cloud folder itself, for example OneDrive.');
+      }
+    }
+    return E.addCloudAccount('folder', { path: resolved });
+  },
+
+  cloudAddWebdav({ url, username, password }) {
+    return E.addCloudAccount('webdav', { url, username, password });
+  },
+
+  cloudAddMega({ email, password }) {
+    return E.addCloudAccount('mega', { email, password });
+  },
+
+  setCloudApp({ provider, clientId, clientSecret }) {
+    E.setCloudApp(provider, { clientId: String(clientId || '').trim(), clientSecret: String(clientSecret || '').trim() || null });
+    return true;
+  },
+
+  /** Starts a browser sign-in. The app opens `url`, then waits with cloudSignInWait. */
+  async cloudSignInStart({ provider }) {
+    const flow = await E.connectCloudAccount(provider);
+    const id = String(++signInSeq);
+    signIns.set(id, flow);
+    flow.done.finally(() => setTimeout(() => signIns.delete(id), 1000));
+    return { id, url: flow.url };
+  },
+
+  cloudSignInWait({ id }) {
+    const flow = signIns.get(String(id));
+    if (!flow) throw userError('That sign-in is no longer running. Please try again.');
+    return flow.done;
+  },
+
+  cloudSignInCancel({ id }) {
+    signIns.get(String(id))?.cancel();
+    return true;
+  },
+
+  /** Forgets an account here and stops every folder syncing through it. */
+  cloudRemove({ id }) {
+    for (const ws of requireAgent().workspaces.values()) {
+      if (!ws.missing && E.unlinkCloud(ws.root, id)) ws.refreshPeers();
+    }
+    return E.removeCloudAccount(id);
+  },
+
+  cloudWorkspaces({ id }) {
+    return E.listCloudWorkspaces(id);
+  },
+
+  /** Keeps a folder in the cloud too. The upload itself happens in the background. */
+  async cloudLink({ root, id, name }) {
+    const ws = requireAgent().getWorkspace(root);
+    if (!ws || ws.missing) throw userError('This folder is not being synced.');
+    const result = await E.linkCloud(root, id, name || ws.name, { initialSync: false });
+    ws.refreshPeers();
+    return { ...result, snapshot: ws.snapshot() };
+  },
+
+  cloudUnlink({ root, id }) {
+    const ws = requireAgent().getWorkspace(root);
+    if (!ws || ws.missing) throw userError('This folder is not being synced.');
+    E.unlinkCloud(root, id);
+    ws.refreshPeers();
+    return ws.snapshot();
+  },
+
+  async cloudJoin({ id, name, dest }) {
+    const a = requireAgent();
+    const created = !fs.existsSync(dest);
+    fs.mkdirSync(dest, { recursive: true });
+    try {
+      E.validateWorkspaceRoot(dest, roots());
+      await E.joinCloud(id, name, dest, { device: deviceName, initialSync: false });
+    } catch (err) {
+      if (created) fs.rmSync(dest, { recursive: true, force: true });
+      throw err;
+    }
+    const ws = a.addWorkspace(dest, { deviceName, validate: false });
+    return ws.snapshot();
   },
 
   shutdown() {

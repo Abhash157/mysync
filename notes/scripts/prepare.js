@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildSync } from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -21,3 +22,13 @@ fs.writeFileSync(path.join(root, 'engine', 'package.json'), '{ "type": "module" 
 for (const f of ['engine-host.mjs', 'host-client.js']) fs.copyFileSync(path.join(hostSrc, f), path.join(root, 'host', f));
 fs.writeFileSync(path.join(root, 'host', 'package.json'), '{ "type": "module" }\n');
 console.log('engine copied');
+
+buildSync({
+  entryPoints: [path.join(root, 'editor', 'live.js')],
+  outfile: path.join(root, 'renderer', 'editor.bundle.js'),
+  bundle: true,
+  minify: true,
+  format: 'iife',
+  legalComments: 'eof',
+});
+console.log('editor built');

@@ -16,9 +16,11 @@ import {
 } from './repo.js';
 import { createIgnoreFilter, isPathIgnored } from './ignore.js';
 import { snapshot, getDeviceName, getSkippedFiles, getDeferredCount } from './auto.js';
-import { readCommit } from './objects.js';
+import { readCommit, readBlob } from './objects.js';
+import { hasConflictMarkers } from './merge.js';
 import { flattenTree } from './commit.js';
 import { syncPeer, adoptDiscoveredPeer, peerName } from './sync.js';
+import { isCloudRemoteName, cloudLabel } from './cloud.js';
 import { startDiscovery } from './discovery.js';
 import { handleSyncRequest } from './server.js';
 import { buildInvite } from './invite.js';
@@ -34,6 +36,7 @@ const MAX_CONFLICTS = 30;
 
 /** Turns network/engine errors into something a non-technical person can act on. */
 export function friendlyError(err) {
+  if (err?.cloud) return err.message; // cloud errors are already written for people
   const code = err?.cause?.code || err?.code;
   if (err?.name === 'TimeoutError' || err?.name === 'AbortError' || code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT') {
     return 'The other device did not answer in time';
@@ -141,7 +144,15 @@ export function estimateFolder(root, { maxMs = 3000, maxFiles = 300_000 } = {}) 
 
 const CONFLICT_COPY = /\.conflict-[0-9a-f]{7}(?=(\.[^./]+)?$)/;
 
-const peerLabel = (name) => (name === 'hub' ? 'Internet' : name.replace(/-[0-9a-f]{4}$/, ''));
+const peerLabel = (name) => {
+  if (name === 'hub') return 'Internet';
+  if (isCloudRemoteName(name)) return cloudLabel(name);
+  return name.replace(/-[0-9a-f]{4}$/, '');
+};
+const peerKind = (name) => (name === 'hub' ? 'internet' : isCloudRemoteName(name) ? 'cloud' : 'local');
+
+// Cloud services rate-limit busy clients, so they are checked less often than devices.
+const CLOUD_INTERVAL_MS = Number(process.env.MYSYNC_CLOUD_INTERVAL_MS) || 20_000;
 
 /**
  * Keeps one folder in sync: watches it, saves changes, and runs an independent
@@ -196,7 +207,7 @@ export class Workspace extends EventEmitter {
     this.timers.tick = setInterval(() => this._tick(), this.interval);
     this._scheduleSafetyScan();
     this._reconcileLinks();
-    this.knownCopies = this._conflictCopies();
+    this.knownFiles = this._headFiles();
     this._scan().then(() => this._pokeAll());
     this._recompute(true);
   }
@@ -236,7 +247,7 @@ export class Workspace extends EventEmitter {
   noteIncoming() {
     this.lastChangeAt = Date.now();
     this._log('Received changes from another device', 'in');
-    this._noticeNewConflictCopies();
+    this._noticeNewConflicts();
     this._recompute();
   }
 
@@ -311,6 +322,7 @@ export class Workspace extends EventEmitter {
           const match = /^sync: (\d+) file/.exec(readCommit(this.root, hash).message);
           const n = match ? Number(match[1]) : 1;
           this._log(`Saved ${n} change${n === 1 ? '' : 's'} on this PC`, 'out');
+          this._dropResolvedConflicts();
         }
       } while (this.scanAgain && !this.stopped);
     } catch (err) {
@@ -391,13 +403,13 @@ export class Workspace extends EventEmitter {
         link.error = null;
         link.failures = 0;
         link.lastOkAt = now;
-        link.nextAt = now + this.interval;
+        link.nextAt = now + (isCloudRemoteName(link.name) ? Math.max(this.interval, CLOUD_INTERVAL_MS) : this.interval);
         this.lastCheckAt = now;
         this.blocked = null;
         if (result.pulled !== 'up-to-date') {
           this.lastChangeAt = now;
           this._log(`Received changes from ${label}`, 'in');
-          this._noticeNewConflictCopies();
+          this._noticeNewConflicts();
         }
         if (result.pushed) this._log(`Sent changes to ${label}`, 'out');
         for (const file of result.conflicts) this._addConflict(file);
@@ -407,6 +419,9 @@ export class Workspace extends EventEmitter {
       if (err.code === 'ELOCKED') {
         // Not a connection problem: a file is open somewhere. Try again shortly.
         this.blocked = { file: err.file || err.message, at: now };
+        link.nextAt = now + 5000;
+      } else if (err.code === 'ECLOUDPARTIAL') {
+        // Another device's upload is still arriving in the cloud: not a failure, just early.
         link.nextAt = now + 5000;
       } else {
         if (link.online !== false) this._log(`Cannot reach ${label}: ${friendlyError(err)}`, 'warn');
@@ -421,34 +436,54 @@ export class Workspace extends EventEmitter {
     }
   }
 
-  /** Paths in the synced tree that are conflict copies, e.g. "notes.conflict-1a2b3c4.txt". */
-  _conflictCopies() {
+  /** Path -> blob hash of everything in the synced tree. */
+  _headFiles() {
     try {
       const head = getHeadInfo(this.root).commitHash;
-      if (!head) return new Set();
-      const files = flattenTree(this.root, readCommit(this.root, head).treeHash);
-      return new Set(Object.keys(files).filter((p) => CONFLICT_COPY.test(p)));
+      return head ? flattenTree(this.root, readCommit(this.root, head).treeHash) : {};
     } catch {
-      return new Set();
+      return {};
+    }
+  }
+
+  _isMarked(hash) {
+    try {
+      return !!hash && hasConflictMarkers(readBlob(this.root, hash));
+    } catch {
+      return false;
     }
   }
 
   /**
    * Another device may have merged a conflict and sent us the result, so we never saw the
-   * merge ourselves. New conflict copies in the tree are the evidence; tell the user.
+   * merge ourselves. New markers or conflict copies in the tree are the evidence; tell the user.
    */
-  _noticeNewConflictCopies() {
-    const now = this._conflictCopies();
-    for (const copy of now) {
-      if (!this.knownCopies?.has(copy)) this._addConflict(copy.replace(CONFLICT_COPY, ''));
+  _noticeNewConflicts() {
+    const before = this.knownFiles || {};
+    const now = this._headFiles();
+    for (const [file, hash] of Object.entries(now)) {
+      if (before[file] === hash) continue;
+      if (CONFLICT_COPY.test(file)) {
+        if (!before[file]) this._addConflict(file.replace(CONFLICT_COPY, ''));
+      } else if (this._isMarked(hash) && !this._isMarked(before[file])) {
+        this._addConflict(file);
+      }
     }
-    this.knownCopies = now;
+    this.knownFiles = now;
+    this._dropResolvedConflicts();
+  }
+
+  /** Forgets in-file conflicts once their markers have been removed. */
+  _dropResolvedConflicts() {
+    const files = this._headFiles();
+    this.conflicts = this.conflicts.filter((c) => !c.inline || this._isMarked(files[c.path]));
   }
 
   _addConflict(file) {
     const recent = this.conflicts.find((c) => c.path === file && Date.now() - c.at < 60_000);
     if (recent) return;
-    this.conflicts.unshift({ path: file, at: Date.now() });
+    const inline = this._isMarked(this._headFiles()[file]);
+    this.conflicts.unshift({ path: file, at: Date.now(), inline });
     this.conflicts.length = Math.min(this.conflicts.length, MAX_CONFLICTS);
     this._log(`"${file}" was changed on two devices. Both versions were kept`, 'warn');
     this.emit('notify', { kind: 'conflict', root: this.root, name: this.name, files: [file] });
@@ -509,7 +544,8 @@ export class Workspace extends EventEmitter {
       peers: [...this.links.values()].map((l) => ({
         name: l.name,
         label: peerLabel(l.name),
-        kind: l.name === 'hub' ? 'internet' : 'local',
+        kind: peerKind(l.name),
+        url: peerKind(l.name) === 'cloud' ? l.url : undefined,
         online: l.online,
         error: l.error,
         lastOkAt: l.lastOkAt,

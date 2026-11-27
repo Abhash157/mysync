@@ -6,7 +6,7 @@ Keep your folders in sync across all your devices, with a Windows app for everyo
 > **[MySync-Setup-0.1.0.exe](https://github.com/Abhash157/mysync/releases/download/app-v0.1.0/MySync-Setup-0.1.0.exe)** (early release, Windows 10/11)
 > · [Release notes](https://github.com/Abhash157/mysync/releases/tag/app-v0.1.0) · [All releases](https://github.com/Abhash157/mysync/releases) · [User guide](docs/app-guide.md)
 
-**Jump to:** [Desktop app](#desktop-app-windows) · [Seamless sync (CLI)](#seamless-sync-no-add--commit--push) · [Sync over the internet](#sync-over-the-internet-hub--workspace-names) · [Git-style commands](#available-commands)
+**Jump to:** [Desktop app](#desktop-app-windows) · [Seamless sync (CLI)](#seamless-sync-no-add--commit--push) · [Sync over the internet](#sync-over-the-internet-hub--workspace-names) · [Cloud storage](#sync-through-cloud-storage-google-drive-onedrive-mega-) · [Git-style commands](#available-commands)
 
 Under the hood it is a lightweight, Git-like version control system built with Node.js, Commander, and Ignore.
 
@@ -57,6 +57,9 @@ npm link
 | `join <url> [dir]` | Join a synced folder | `mysync join http://ip:3000 --token T` |
 | `sync` | One automatic sync round | `mysync sync` |
 | `invite` | Print the join command for this folder | `mysync invite` |
+| `cloud add <provider>` | Connect Google Drive, OneDrive, MEGA, WebDAV or a cloud folder | `mysync cloud add folder ~/OneDrive` |
+| `cloud link <account> [name]` | Sync this folder through cloud storage | `mysync cloud link onedrive` |
+| `cloud join <account> <name> [dir]` | Get a folder kept in cloud storage | `mysync cloud join onedrive notes` |
 
 ## Desktop app (Windows)
 
@@ -90,7 +93,7 @@ No IP needed on the same network: `mysync join auto --token <token>` finds the d
 - `mysync invite` reprints the join command; `--device <name>` names this device in history.
 - Every device can reach every peer it has a remote for. A phone behind NAT can join a PC and still get live updates, because it polls and pushes outward.
 
-**If two devices edit the same file at once**, nothing is lost. The newest edit keeps the filename, and the other version is saved beside it as `name.conflict-<hash>.ext`. Both devices make the same choice, so they converge. If one deletes a file that another edited, the edit wins.
+**If two devices edit the same file at once**, nothing is lost. In text files, edits to different lines are combined, and edits to the same lines are kept inside the file between git-style `<<<<<<<` / `=======` / `>>>>>>>` markers (older first, newer second). For binary files the newest edit keeps the filename, and the other version is saved beside it as `name.conflict-<hash>.ext`. Both devices make the same choice, so they converge; keep all devices on the same version. If one deletes a file that another edited, the edit wins.
 
 **Security:** every request needs the repo's token (in `.mysync/config.json`). Traffic is plain HTTP, so use it on a trusted network or over a VPN like Tailscale/WireGuard.
 
@@ -123,6 +126,41 @@ mysync watch
 ```
 
 An invite code carries the hub, the name, the token and the LAN addresses. Join tries the LAN first and falls back to the hub, then keeps both links, so devices sync directly at home and through the hub when apart. Treat the code like a password. `mysync invite` reprints it. The hub stores only bare copies (no working files), and refuses names that are already taken by someone else.
+
+## Sync through cloud storage (Google Drive, OneDrive, MEGA, ...)
+
+No server to run: use storage you already have as the meeting point. Devices never need to be online at the same time, and phones or laptops behind NAT work because everything goes outward to the cloud.
+
+**Connect an account, once per device:**
+```bash
+mysync cloud detect                                   # cloud folders found on this PC (OneDrive, Dropbox, Google Drive, MEGA...)
+mysync cloud add folder "C:\Users\me\OneDrive"        # any folder a desktop cloud app keeps in sync
+mysync cloud add webdav https://cloud.example.com/remote.php/dav/files/me -u me -p <app-password>   # Nextcloud, ownCloud, pCloud, NAS...
+mysync cloud add mega -e me@example.com -p <password>
+mysync cloud add gdrive --client-id <id> --client-secret <secret>   # opens the browser to sign in
+mysync cloud add onedrive --client-id <id>
+mysync cloud list
+```
+
+**Keep a folder there, and get it on another device:**
+```bash
+cd ~/notes && mysync cloud link onedrive notes        # account id, or the provider name if you have one of that kind
+mysync watch
+
+mysync cloud workspaces onedrive                      # on the other device: what is stored there
+mysync cloud join onedrive notes ~/notes
+mysync watch
+```
+
+How it works and what to know:
+
+- Everything lives in a `MySync` folder in the provider: per folder a `workspace.json`, the same compressed objects as `.mysync/objects`, and one small head file per device. Cloud storage cannot do an atomic "update if unchanged", so each device only ever writes its own head file, uploads objects before the head that needs them, and folds all heads into one commit with the deterministic merge. Every device computes the same result, so they converge without locking. Conflicts are handled the same way as between devices.
+- Cloud remotes are checked every 20 seconds (`MYSYNC_CLOUD_INTERVAL_MS`) rather than every few seconds, to stay inside API rate limits. They work alongside LAN peers and a hub: devices joined through the cloud share the folder token, so they also sync directly when on the same network.
+- **Cloud folder** is the simplest option: the provider's desktop app does the uploading. If another device's upload is still on its way, MySync waits and retries instead of failing.
+- **Google Drive** uses the `drive.file` scope (MySync can only see files it created) and **OneDrive** uses its app folder (`Apps/MySync`). Both need an OAuth app ID you register yourself (Google Cloud Console "Desktop app" client with the Drive API enabled; Azure "Mobile and desktop" app with redirect URI `http://localhost`). Pass it once with `--client-id`, or set `MYSYNC_GOOGLE_CLIENT_ID`/`MYSYNC_GOOGLE_CLIENT_SECRET` and `MYSYNC_ONEDRIVE_CLIENT_ID`.
+- **MEGA** goes through the optional [`megajs`](https://www.npmjs.com/package/megajs) package; accounts with two-step login are not supported yet (use the MEGA desktop app's folder instead).
+- Sign-in tokens and passwords are stored in `~/.mysync-global.json`, like the hub secret. The cloud copy is not encrypted beyond what the provider does, and `workspace.json` holds the folder token, so anyone with access to that cloud folder can join it.
+- `mysync push`/`pull`/`fetch` do not work with cloud remotes; use `sync` or `watch`.
 
 ## Remote Syncing (manual, git-style)
 

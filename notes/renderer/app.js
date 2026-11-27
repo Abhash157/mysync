@@ -3,7 +3,7 @@
   const api = window.api;
   const { esc } = window.md;
 
-  const S = { vault: '', files: [], byName: new Map(), tabs: [], active: -1, open: new Set(), panel: 'files', side: true, sw: 260 };
+  const S = { vault: '', files: [], byName: new Map(), tabs: [], active: -1, open: new Set(), panel: 'files', side: true, sw: 260, preview: true };
 
   const P = {
     files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -14,6 +14,9 @@
     x: '<path d="M6 6l12 12M18 6 6 18"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     cloud: '<path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 1 0 5 14.5 3.5 3.5 0 0 0 6.5 19z"/>',
+    outline: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    command: '<path d="M4 17l6-5-6-5M12 19h8"/>',
+    update: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
     swap: '<path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/>',
   };
   const svg = (k) => `<svg viewBox="0 0 24 24">${P[k]}</svg>`;
@@ -23,7 +26,8 @@
   const dirOf = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
   const cur = () => S.tabs[S.active];
   const modal = $('#modal'), mq = $('#mq');
-  const ed = $('#ed'), view = $('#view'), title = $('#title'), pane = $('#pane');
+  const view = $('#view'), title = $('#title'), pane = $('#pane'), merge = $('#merge');
+  const ed = window.liveEditor.create($('#ed'), { resolve: (name) => resolveLink(name), follow: (link) => follow(link) });
 
   function toast(msg) {
     const t = $('#toast');
@@ -137,25 +141,54 @@
     $('#empty').hidden = !!t;
     $('#stats').textContent = '';
     $('#mode').textContent = '';
+    $('#previewBtn').hidden = true;
+    drawOutline();
     if (!t) return;
     title.value = base(t.p);
-    $('#mode').textContent = t.mode === 'edit' ? 'Editing' : 'Reading';
-    ed.hidden = t.mode !== 'edit';
-    view.hidden = t.mode === 'edit';
-    if (t.mode === 'edit') {
-      ed.value = t.text;
-      fit();
+    const parts = window.conflicts.parse(t.text);
+    const clash = parts.some((x) => x.older);
+    if (!clash) t.raw = false;
+    const choosing = clash && !t.raw;
+    $('#mode').textContent = choosing ? 'Resolving conflict' : t.mode === 'edit' ? 'Editing' : 'Reading';
+    merge.hidden = !choosing;
+    ed.hidden = choosing || t.mode !== 'edit';
+    view.hidden = choosing || t.mode === 'edit';
+    $('#previewBtn').hidden = choosing || t.mode !== 'edit';
+    $('#previewBtn').classList.toggle('on', S.preview);
+    $('#previewBtn').textContent = S.preview ? 'Live preview' : 'Source';
+    if (choosing) {
+      merge.innerHTML = window.conflicts.render(parts);
+    } else if (t.mode === 'edit') {
+      ed.setPreview(S.preview);
+      ed.load(t.text);
       if (modal.hidden) ed.focus();
-    } else {
-      drawView();
     }
+    if (!view.hidden) drawView();
     stats();
+  }
+
+  function togglePreview() {
+    const t = cur();
+    if (!t) return;
+    if (t.mode !== 'edit') { t.mode = 'edit'; S.preview = true; }
+    else S.preview = !S.preview;
+    show();
+    persist();
+  }
+  $('#previewBtn').onclick = togglePreview;
+
+  // Redraw the outline shortly after typing stops.
+  let drawTimer;
+  function redraw() {
+    clearTimeout(drawTimer);
+    drawTimer = setTimeout(drawOutline, 100);
   }
 
   function drawView() {
     const t = cur();
     const top = pane.scrollTop;
-    view.innerHTML = window.md.render(t.text, resolveLink) || '<p style="color:var(--muted)">Empty note. Double-click to edit.</p>';
+    const empty = 'Empty note. Double-click to edit.';
+    view.innerHTML = window.md.render(t.text, resolveLink) || `<p style="color:var(--muted)">${empty}</p>`;
     pane.scrollTop = top;
   }
 
@@ -169,11 +202,22 @@
   function toggleMode() {
     const t = cur();
     if (!t) return;
-    t.mode = t.mode === 'edit' ? 'read' : 'edit';
+    if (!merge.hidden) { t.raw = true; t.mode = 'edit'; }
+    else if (t.raw) t.raw = false;
+    else t.mode = t.mode === 'edit' ? 'read' : 'edit';
     show();
   }
+  merge.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-keep]');
+    if (!b) return;
+    if (b.dataset.keep === 'edit') return toggleMode();
+    const t = cur();
+    t.text = window.conflicts.resolve(t.text, +b.dataset.n, b.dataset.keep);
+    dirty();
+    show();
+  });
   $('#mode').onclick = toggleMode;
-  view.addEventListener('dblclick', (e) => { if (!e.target.closest('a, input')) toggleMode(); });
+  view.addEventListener('dblclick', (e) => { if (cur().mode === 'read' && !e.target.closest('a, input')) toggleMode(); });
 
   // ---------------------------------------------------------------- saving
 
@@ -196,15 +240,9 @@
 
   // ---------------------------------------------------------------- editor
 
-  function fit() {
-    const top = pane.scrollTop;
-    ed.style.height = 'auto';
-    ed.style.height = ed.scrollHeight + 'px';
-    pane.scrollTop = top;
-  }
-  ed.addEventListener('input', () => { cur().text = ed.value; fit(); stats(); dirty(); });
+  ed.onInput(() => { cur().text = ed.value; stats(); dirty(); redraw(); });
   $('#page').addEventListener('mousedown', (e) => {
-    if (e.target === $('#page') && cur().mode === 'edit') { e.preventDefault(); ed.focus(); ed.setSelectionRange(ed.value.length, ed.value.length); }
+    if (e.target === $('#page') && cur().mode === 'edit') { e.preventDefault(); ed.focus(); ed.setSelectionRange(ed.value.length); }
   });
 
   function setCaret(line) {
@@ -213,19 +251,103 @@
     for (let i = 0; i < line && i < lines.length; i++) pos += lines[i].length + 1;
     ed.focus();
     ed.setSelectionRange(pos, pos + (lines[line] || '').length);
-    pane.scrollTop = ed.offsetTop + line * 26 - pane.clientHeight / 3;
+    ed.reveal(pos);
   }
 
-  // execCommand keeps the textarea's native undo history intact.
-  const ins = (text) => { ed.focus(); document.execCommand(text ? 'insertText' : 'delete', false, text); };
+  const ins = (text) => { ed.focus(); ed.insert(text); };
   const replace = (a, b, text) => { ed.setSelectionRange(a, b); ins(text); };
   const lineStart = (pos) => ed.value.lastIndexOf('\n', pos - 1) + 1;
   const lineEnd = (pos) => { const i = ed.value.indexOf('\n', pos); return i < 0 ? ed.value.length : i; };
   const LIST = /^(\s*)(?:([-*+])|(\d+)([.)]))\s+(\[[ xX]\]\s+)?/;
 
-  ed.addEventListener('keydown', (e) => {
+  // The caret as { n: line number, ch: column }, plus the text split into lines.
+  function where(pos = ed.selectionStart) {
+    const before = ed.value.slice(0, pos).split('\n');
+    return { lines: ed.value.split('\n'), n: before.length - 1, ch: before[before.length - 1].length };
+  }
+  const offset = (lines, n, ch) => lines.slice(0, n).reduce((sum, l) => sum + l.length + 1, 0) + ch;
+
+  function tableDo(action) {
+    const { lines, n, ch } = where();
+    const r = window.blocks.table(lines, n, ch, action);
+    if (!r) return false;
+    const from = offset(lines, r.start, 0), to = offset(lines, r.end - 1, lines[r.end - 1].length);
+    const text = r.out.join('\n');
+    if (ed.value.slice(from, to) !== text) replace(from, to, text);
+    const at = offset(r.out, r.line, 0) + from;
+    ed.setSelectionRange(at + r.from, at + r.to);
+    ed.enterTable();
+    return true;
+  }
+
+  function renumber() {
+    const { lines, n, ch } = where();
+    const out = window.blocks.renumber(lines, n);
+    const changed = out.map((l, i) => i).filter((i) => out[i] !== lines[i]);
+    if (!changed.length) return;
+    const first = changed[0], last = changed[changed.length - 1];
+    replace(offset(lines, first, 0), offset(lines, last, lines[last].length), out.slice(first, last + 1).join('\n'));
+    const at = offset(out, n, Math.max(0, ch + out[n].length - lines[n].length));
+    ed.setSelectionRange(at, at);
+  }
+
+  function moveLines(d) {
+    const a = ed.selectionStart, b = ed.selectionEnd;
+    const ls = lineStart(a), le = lineEnd(b);
+    if (d < 0 ? ls === 0 : le === ed.value.length) return;
+    const block = ed.value.slice(ls, le);
+    const from = d < 0 ? lineStart(ls - 1) : ls;
+    const to = d < 0 ? le : lineEnd(le + 1);
+    const other = d < 0 ? ed.value.slice(from, ls - 1) : ed.value.slice(le + 1, to);
+    replace(from, to, d < 0 ? `${block}\n${other}` : `${other}\n${block}`);
+    const moved = d < 0 ? from : from + other.length + 1;
+    ed.setSelectionRange(moved + (a - ls), moved + (b - ls));
+  }
+
+  // Adds `prefix` to every selected line, or takes it off again when all of them have it.
+  function prefixLines(prefix, pattern) {
+    const ls = lineStart(ed.selectionStart), le = lineEnd(ed.selectionEnd);
+    const lines = ed.value.slice(ls, le).split('\n');
+    const has = lines.every((l) => pattern.test(l));
+    const out = lines.map((l, i) => {
+      const bare = l.replace(/^(#{1,6}\s+|>\s?|\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)/, '');
+      return has ? bare : (typeof prefix === 'function' ? prefix(i) : prefix) + bare;
+    }).join('\n');
+    replace(ls, le, out);
+  }
+
+  function wrap(open, close = open) {
+    const a = ed.selectionStart, b = ed.selectionEnd;
+    ins(open + ed.value.slice(a, b) + close);
+    if (a === b) ed.setSelectionRange(a + open.length, a + open.length);
+  }
+
+  // Puts a block on its own lines at the caret and selects `pick` inside it.
+  function insertBlock(text, pick) {
+    const a = ed.selectionStart;
+    const before = ed.value.slice(0, a);
+    const lead = !before || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+    ins(lead + text + '\n');
+    const at = a + lead.length + text.indexOf(pick);
+    ed.setSelectionRange(at, at + pick.length);
+  }
+
+  const insertTable = () => { insertBlock('| Column 1 | Column 2 |\n| -------- | -------- |\n|          |          |', 'Column 1'); ed.enterTable(); };
+
+  const editorKeys = (e) => {
+    if (e.target.closest('.cm-table')) return; // table cells handle their own keys
     const c = e.ctrlKey || e.metaKey;
     const a = ed.selectionStart, b = ed.selectionEnd;
+
+    if (e.altKey && !c && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      moveLines(e.key === 'ArrowUp' ? -1 : 1);
+      return;
+    }
+    if (!c && !e.altKey && !e.isComposing && window.blocks.TABLE.test(ed.value.slice(lineStart(a), lineEnd(a)))) {
+      const action = e.key === 'Tab' ? (e.shiftKey ? 'prev' : 'next') : e.key === 'Enter' && !e.shiftKey && a > lineStart(a) ? 'enter' : null;
+      if (action) { e.preventDefault(); tableDo(action); return; }
+    }
 
     if (e.key === 'Enter' && !c && !e.shiftKey && !e.altKey && !e.isComposing && a === b) {
       const ls = lineStart(a);
@@ -235,6 +357,7 @@
       if (!ed.value.slice(ls + m[0].length, lineEnd(a)).trim() && a === lineEnd(a)) { replace(ls, a, ''); return; }
       const marker = m[2] || `${+m[3] + 1}${m[4]}`;
       ins('\n' + m[1] + marker + ' ' + (m[5] ? '[ ] ' : ''));
+      if (m[3]) renumber();
     } else if (e.key === 'Tab' && !c) {
       e.preventDefault();
       const ls = lineStart(a), le = lineEnd(b);
@@ -244,12 +367,10 @@
       replace(ls, le, out);
       if (a === b) { const p = Math.max(ls, a + out.length - block.length); ed.setSelectionRange(p, p); }
       else ed.setSelectionRange(ls, ls + out.length);
+      if (a === b) renumber();
     } else if (c && !e.shiftKey && !e.altKey && 'bi'.includes(e.key.toLowerCase()) && e.key.length === 1) {
       e.preventDefault();
-      const w = e.key.toLowerCase() === 'b' ? '**' : '*';
-      const sel = ed.value.slice(a, b);
-      ins(w + sel + w);
-      if (a === b) ed.setSelectionRange(a + w.length, a + w.length);
+      wrap(e.key.toLowerCase() === 'b' ? '**' : '*');
     } else if (c && e.key.toLowerCase() === 'l') {
       e.preventDefault();
       const ls = lineStart(a), le = lineEnd(a);
@@ -264,7 +385,9 @@
       }
       replace(ls, le, out);
     }
-  });
+  };
+  // Handled keys must not reach the editor (or the window shortcuts) as well.
+  ed.dom.addEventListener('keydown', (e) => { editorKeys(e); if (e.defaultPrevented) e.stopPropagation(); }, true);
 
   // ---------------------------------------------------------------- reading view
 
@@ -272,17 +395,26 @@
     const t = cur();
     const box = e.target.closest('input[type=checkbox]');
     if (box) {
+      const top = pane.scrollTop;
       t.text = window.md.toggle(t.text, +box.dataset.l);
       dirty();
       drawView();
+      pane.scrollTop = top;
       return;
     }
     const a = e.target.closest('a');
     if (!a) return;
     e.preventDefault();
-    if (a.classList.contains('wl')) followLink(a.dataset.t);
-    else api.external(a.getAttribute('href'));
+    if (a.classList.contains('tag')) follow({ tag: a.dataset.tag });
+    else if (a.classList.contains('wl')) follow({ note: a.dataset.t });
+    else follow({ url: a.getAttribute('href') });
   });
+
+  function follow({ tag, note, url }) {
+    if (tag) searchFor('#' + tag);
+    else if (note) followLink(note);
+    else api.external(url);
+  }
 
   const followLink = guard(async (name) => {
     let p = resolveLink(name);
@@ -307,7 +439,7 @@
   }
 
   title.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); title.blur(); if (cur().mode === 'edit') ed.focus(); }
+    if (e.key === 'Enter') { e.preventDefault(); title.blur(); if (cur().mode === 'edit' && !ed.hidden) ed.focus(); }
     if (e.key === 'Escape') { title.value = base(cur().p); title.blur(); }
   });
   title.addEventListener('change', guard(async () => {
@@ -408,9 +540,49 @@
     S.panel = name;
     $('#filesPanel').hidden = name !== 'files';
     $('#searchPanel').hidden = name !== 'search';
-    document.querySelectorAll('#ribbon [data-act=files],#ribbon [data-act=search]').forEach((b) => b.classList.toggle('on', b.dataset.act === name));
+    $('#outlinePanel').hidden = name !== 'outline';
+    document.querySelectorAll('#ribbon [data-act=files],#ribbon [data-act=search],#ribbon [data-act=outline]').forEach((b) => b.classList.toggle('on', b.dataset.act === name));
     if (name === 'search') { $('#q').focus(); $('#q').select(); }
+    drawOutline();
   }
+
+  function searchFor(text) {
+    showPanel('search');
+    $('#q').value = text;
+    $('#q').dispatchEvent(new Event('input'));
+  }
+
+  // Headings of the open note, and the notes that link to it.
+  let outlineRun = 0;
+  async function drawOutline() {
+    if (S.panel !== 'outline' || !S.side) return;
+    const run = ++outlineRun;
+    const t = cur();
+    if (!t) { $('#outline').innerHTML = '<div class="none">No note open</div>'; return; }
+    const name = base(t.p).toLowerCase();
+    const link = (l) => [...l.matchAll(/\[\[([^\]|#]+)/g)].some((m) => resolveLink(m[1].trim()) === t.p);
+    const hits = (await api.search('[[')).filter((h) => h.p !== t.p);
+    const named = (await api.search('[[' + name)).filter((h) => h.p !== t.p);
+    if (run !== outlineRun) return;
+    const from = [...new Map([...hits, ...named].filter((h) => h.lines.some((l) => link(l.t))).map((h) => [h.p, h])).values()];
+    const heads = window.md.headings(t.text).map((h) => `<div class="row" data-l="${h.line}" style="padding-left:${6 + (h.level - 1) * 12}px"><span class="lbl">${esc(h.text)}</span></div>`).join('');
+    const backs = from.map((h) => `<div class="row" data-p="${esc(h.p)}"><span class="lbl">${esc(base(h.p))}</span></div>`).join('');
+    $('#outline').innerHTML = (heads || '<div class="none">No headings</div>') + '<h4>Backlinks</h4>' + (backs || '<div class="none">No notes link here</div>');
+  }
+  $('#outline').addEventListener('click', (e) => {
+    const row = e.target.closest('.row');
+    if (!row) return;
+    if (row.dataset.p) return open(row.dataset.p);
+    const line = +row.dataset.l;
+    if (!view.hidden) view.querySelector(`[data-l="${line}"]`)?.scrollIntoView({ block: 'start' });
+    if (!ed.hidden) {
+      const { lines } = where();
+      const at = offset(lines, line, 0);
+      ed.focus();
+      ed.setSelectionRange(at, at + (lines[line] || '').length);
+      ed.reveal(at);
+    }
+  });
 
   function toggleSide(force) {
     S.side = force ?? !S.side;
@@ -437,9 +609,66 @@
     open(hit.dataset.p, l === '' || l == null ? undefined : +l);
   });
 
-  let opts = [], sel = 0;
-  function switcher() {
+  // Commands that edit text switch to the editor first.
+  const editing = (run) => () => {
+    const t = cur();
+    if (!t) return toast('Open a note first');
+    if (t.mode !== 'edit' || ed.hidden) { t.mode = 'edit'; t.raw = true; show(); }
+    ed.focus();
+    run();
+  };
+  const inTable = (action) => editing(() => { if (!ed.cellAction(action) && !tableDo(action)) toast('Put the cursor in a table first'); });
+  const COMMANDS = [
+    ['Insert table', editing(insertTable)],
+    ['Table: add row', inTable('rowBelow')],
+    ['Table: add column', inTable('colRight')],
+    ['Table: delete row', inTable('delRow')],
+    ['Table: delete column', inTable('delCol')],
+    ['Table: align', inTable('format')],
+    ['To-do list', editing(() => prefixLines('- [ ] ', /^\s*[-*+]\s+\[[ xX]\]/))],
+    ['Bullet list', editing(() => prefixLines('- ', /^\s*[-*+]\s+(?!\[[ xX]\])/))],
+    ['Numbered list', editing(() => prefixLines((i) => `${i + 1}. `, /^\s*\d+[.)]\s/))],
+    ['Heading 1', editing(() => prefixLines('# ', /^# /))],
+    ['Heading 2', editing(() => prefixLines('## ', /^## /))],
+    ['Heading 3', editing(() => prefixLines('### ', /^### /))],
+    ['Quote', editing(() => prefixLines('> ', /^>/))],
+    ['Callout', editing(() => insertBlock('> [!note] Title\n> Text', 'Title'))],
+    ['Code block', editing(() => insertBlock('```\ncode\n```', 'code'))],
+    ['Divider', editing(() => insertBlock('---', ''))],
+    ['Bold', editing(() => wrap('**'))],
+    ['Italic', editing(() => wrap('*'))],
+    ['Strikethrough', editing(() => wrap('~~'))],
+    ['Highlight', editing(() => wrap('=='))],
+    ['Inline code', editing(() => wrap('`'))],
+    ['Link to note', editing(() => wrap('[[', ']]'))],
+    ['Move line up', editing(() => moveLines(-1))],
+    ['Move line down', editing(() => moveLines(1))],
+    ['Toggle live preview / source', () => togglePreview()],
+    ['Toggle reading view', () => toggleMode()],
+    ['Show outline and backlinks', () => showPanel('outline')],
+    ['Search all notes', () => showPanel('search')],
+    ['New note', () => newNote('')],
+    ['New folder', () => newFolder('')],
+    ['Check for updates', () => checkUpdate()],
+  ];
+
+  // Right-click in the editor offers the usual blocks.
+  ed.dom.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const cell = e.target.closest('.cm-table th, .cm-table td');
+    if (cell) cell.focus();
+    const table = cell || window.blocks.TABLE.test(ed.value.slice(lineStart(ed.selectionStart), lineEnd(ed.selectionStart)));
+    const names = table
+      ? ['Table: add row', 'Table: add column', 'Table: delete row', 'Table: delete column', 'Table: align']
+      : ['Insert table', 'To-do list', 'Bullet list', 'Numbered list', 'Callout', 'Code block', 'Highlight', 'Link to note'];
+    showMenu(e.clientX, e.clientY, names.map((n) => ({ label: n, run: COMMANDS.find((c) => c[0] === n)[1] })));
+  });
+
+  let opts = [], sel = 0, commands = false;
+  function switcher(asCommands = false) {
+    commands = asCommands;
     modal.hidden = false;
+    mq.placeholder = commands ? 'Run a command…' : 'Find or create a note…';
     mq.value = '';
     drawOpts();
     mq.focus();
@@ -460,6 +689,13 @@
   }
   function drawOpts() {
     const q = mq.value.trim().toLowerCase();
+    if (commands) {
+      opts = COMMANDS.map(([label, run]) => ({ label, run, dir: '', s: score(q, label) })).filter((o) => !q || o.s >= 0);
+      if (q) opts.sort((a, b) => b.s - a.s);
+      sel = 0;
+      paintOpts();
+      return;
+    }
     const notes = S.files.filter((f) => !f.d).map((f) => ({ p: f.p, label: base(f.p), dir: dirOf(f.p) }));
     opts = q
       ? notes.map((n) => ({ ...n, s: score(q, n.p.replace(/\.md$/i, '')) })).filter((n) => n.s >= 0).sort((a, b) => b.s - a.s)
@@ -470,7 +706,7 @@
     paintOpts();
   }
   function paintOpts() {
-    $('#mlist').innerHTML = opts.map((o, i) => `<div class="opt${i === sel ? ' on' : ''}" data-i="${i}"><span>${esc(o.label)}</span><small>${esc(o.dir)}</small></div>`).join('') || '<div class="none">No notes</div>';
+    $('#mlist').innerHTML = opts.map((o, i) => `<div class="opt${i === sel ? ' on' : ''}" data-i="${i}"><span>${esc(o.label)}</span><small>${esc(o.dir)}</small></div>`).join('') || `<div class="none">No ${commands ? 'commands' : 'notes'}</div>`;
     const on = $('#mlist .on');
     if (on) on.scrollIntoView({ block: 'nearest' });
   }
@@ -478,13 +714,14 @@
     const o = opts[i];
     if (!o) return;
     closeModal();
+    if (o.run) return o.run();
     if (o.create) { const p = await api.create('', o.create); await refresh(); await openNote(p); } else await openNote(o.p);
   });
   mq.addEventListener('input', drawOpts);
   mq.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, opts.length - 1); paintOpts(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); paintOpts(); e.preventDefault(); }
-    else if (e.key === 'Enter') choose(sel);
+    else if (e.key === 'Enter') { e.preventDefault(); choose(sel); }
     else if (e.key === 'Escape') closeModal();
   });
   $('#mlist').addEventListener('click', (e) => { const o = e.target.closest('.opt'); if (o) choose(+o.dataset.i); });
@@ -507,6 +744,13 @@
     const info = await api.pick();
     if (info) loadVault(info);
   });
+  let checking = false;
+  const checkUpdate = guard(async () => {
+    if (checking) return;
+    checking = true;
+    toast('Checking for updates…');
+    try { toast(await api.checkUpdate()); } finally { checking = false; }
+  });
   window.notes = { toast, guard, loadVault, flush, refresh, reload: () => reload() };
 
   document.addEventListener('click', (e) => {
@@ -515,9 +759,12 @@
     const act = b.dataset.act;
     if (act === 'files') S.side && S.panel === 'files' ? toggleSide(false) : showPanel('files');
     else if (act === 'search') S.side && S.panel === 'search' ? toggleSide(false) : showPanel('search');
+    else if (act === 'outline') S.side && S.panel === 'outline' ? toggleSide(false) : showPanel('outline');
+    else if (act === 'palette') switcher(true);
     else if (act === 'new') newNote('');
     else if (act === 'mkdir') newFolder('');
     else if (act === 'vault') changeVault();
+    else if (act === 'update') checkUpdate();
     else if (act === 'sync') window.notes.openSync();
   });
 
@@ -543,7 +790,8 @@
     const run = {
       n: () => !e.shiftKey && newNote(''),
       o: () => switcher(),
-      e: () => toggleMode(),
+      e: () => (e.shiftKey ? togglePreview() : toggleMode()),
+      p: () => switcher(true),
       w: () => cur() && closeTab(S.active),
       f: () => e.shiftKey && showPanel('search'),
       '\\': () => toggleSide(),
@@ -565,11 +813,19 @@
       open: [...S.open],
       side: S.side,
       sw: S.sw,
+      preview: S.preview,
     }), 300);
+  }
+
+  async function foldCopies() {
+    await flush();
+    const n = await api.fold();
+    if (n) toast(`Merged ${n} conflict cop${n === 1 ? 'y' : 'ies'} into the original note${n === 1 ? '' : 's'}. The files are in the Recycle Bin.`);
   }
 
   // Pick up edits made elsewhere (e.g. by the sync app) whenever the window regains focus.
   const reload = guard(async () => {
+    await foldCopies();
     await refresh();
     for (let i = S.tabs.length - 1; i >= 0; i--) {
       const t = S.tabs[i];
@@ -579,8 +835,13 @@
       if (text !== t.text) {
         t.text = text;
         if (i === S.active) {
-          const pos = ed.selectionStart;
-          if (t.mode === 'edit') { ed.value = text; fit(); ed.setSelectionRange(pos, pos); } else drawView();
+          const clash = !t.raw && (!merge.hidden || window.conflicts.parse(text).some((x) => x.older));
+          if (clash) show();
+          else {
+            if (t.mode === 'edit') ed.update(text);
+            if (!view.hidden) drawView();
+          }
+          drawOutline();
           stats();
         }
       }
@@ -589,11 +850,13 @@
   api.onFocus(reload);
 
   (async () => {
+    await foldCopies().catch(() => {});
     const info = await api.info();
     S.vault = info.vault;
     $('#vaultName').textContent = base(info.vault.replace(/[\\/]+$/, '').replace(/\\/g, '/'));
     const s = info.session;
     S.open = new Set(s.open || []);
+    S.preview = s.preview !== false;
     if (s.sw) { S.sw = s.sw; document.documentElement.style.setProperty('--sw', s.sw + 'px'); }
     if (s.side === false) toggleSide(false);
     setFiles(info.files);
@@ -602,7 +865,7 @@
     }
     if (!S.tabs.length) {
       const first = info.files.find((f) => !f.d && f.p === 'Welcome.md');
-      if (first) S.tabs.push({ p: first.p, text: await api.read(first.p), mode: 'read', dirty: false });
+      if (first) S.tabs.push({ p: first.p, text: await api.read(first.p), mode: 'edit', dirty: false });
     }
     S.active = S.tabs.length ? Math.min(Math.max(s.active ?? 0, 0), S.tabs.length - 1) : -1;
     showPanel('files');

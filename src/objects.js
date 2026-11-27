@@ -229,3 +229,65 @@ export function readCommit(repoRoot, commitHash) {
     message: messagePart.trim(),
   };
 }
+
+/**
+ * Hashes an object refers to: tree and parents for a commit, entries for a tree.
+ * @param {string} repoRoot
+ * @param {string} hash
+ * @returns {string[]}
+ */
+export function childHashes(repoRoot, hash) {
+  const { type } = readObject(repoRoot, hash);
+  if (type === 'commit') {
+    const commit = readCommit(repoRoot, hash);
+    return [commit.treeHash, ...commit.parentHashes].filter(Boolean);
+  }
+  if (type === 'tree') return readTree(repoRoot, hash).map((entry) => entry.hash);
+  return [];
+}
+
+/**
+ * Every object name reachable from `start`, skipping history another side already
+ * has: everything reachable from the commits in `known` (those present locally).
+ * @param {string} repoRoot
+ * @param {string} start
+ * @param {Array<string|null>} [known]
+ * @returns {string[]}
+ */
+export function reachableObjects(repoRoot, start, known = []) {
+  const skip = new Set();
+  const commits = known.filter((hash) => hash && fs.existsSync(getObjectPath(repoRoot, hash)));
+  while (commits.length > 0) {
+    const hash = commits.pop();
+    if (skip.has(hash)) continue;
+    skip.add(hash);
+    commits.push(...readCommit(repoRoot, hash).parentHashes);
+  }
+
+  const found = new Set();
+  const stack = [start];
+  while (stack.length > 0) {
+    const hash = stack.pop();
+    if (!hash || found.has(hash) || skip.has(hash)) continue;
+    found.add(hash);
+    stack.push(...childHashes(repoRoot, hash));
+  }
+  return [...found];
+}
+
+/**
+ * Checks that compressed object bytes from somewhere untrusted really hash to `hash`.
+ * @param {string} hash
+ * @param {Buffer} compressed
+ * @returns {boolean}
+ */
+export function isValidObject(hash, compressed) {
+  try {
+    const raw = zlib.inflateSync(compressed);
+    const nul = raw.indexOf(0);
+    const [type] = raw.subarray(0, nul).toString('utf8').split(' ');
+    return hashObject(type, raw.subarray(nul + 1)).hash === hash;
+  } catch {
+    return false;
+  }
+}

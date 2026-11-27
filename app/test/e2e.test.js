@@ -18,6 +18,10 @@ const dirA = path.join(sandbox, 'Notes');
 const dirB = path.join(sandbox, 'LaptopNotes');
 const dirC = path.join(sandbox, 'Photos');
 const dirD = path.join(sandbox, 'JoinedPhotos');
+const dirCloud = path.join(sandbox, 'MyCloud');
+const dirE = path.join(sandbox, 'CloudLaptop');
+const dirF = path.join(sandbox, 'Recipes');
+const dirG = path.join(sandbox, 'RecipesHere');
 const dataDir = path.join(sandbox, 'appdata');
 
 const env = {
@@ -28,6 +32,7 @@ const env = {
   MYSYNC_DISCOVERY_PORT: '41888',
   MYSYNC_GLOBAL_CONFIG: path.join(sandbox, 'global.json'),
   MYSYNC_AUTHOR_NAME: 'Laptop',
+  MYSYNC_CLOUD_INTERVAL_MS: '1000',
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -57,7 +62,7 @@ async function until(check, what, timeout = 30000) {
 
 fs.rmSync(shotsDir, { recursive: true, force: true });
 fs.mkdirSync(shotsDir, { recursive: true });
-for (const d of [dirA, dirB, dirC, dirD]) fs.mkdirSync(d, { recursive: true });
+for (const d of [dirA, dirB, dirC, dirD, dirCloud, dirF]) fs.mkdirSync(d, { recursive: true });
 fs.rmdirSync(dirB);
 fs.rmdirSync(dirD);
 
@@ -129,12 +134,8 @@ try {
   fs.writeFileSync(path.join(dirB, 'todo.txt'), 'laptop version\n');
   spawnCli(['watch', '-p', '3092', '-i', '1'], dirB);
   await page.getByText('changed on two devices').first().waitFor({ timeout: 40000 });
-  await until(
-    () => fs.readdirSync(dirA).some((f) => f.startsWith('todo.conflict-')) && fs.readdirSync(dirB).some((f) => f.startsWith('todo.conflict-')),
-    'both devices hold both versions',
-  );
-  const kept = [read(dirA, 'todo.txt'), read(dirA, fs.readdirSync(dirA).find((f) => f.startsWith('todo.conflict-')))].sort();
-  assert.deepStrictEqual(kept, ['desk version\n', 'laptop version\n']);
+  const both = (dir) => exists(dir, 'todo.txt') && ['<<<<<<<', 'desk version', 'laptop version'].every((s) => read(dir, 'todo.txt').includes(s));
+  await until(() => both(dirA) && both(dirB), 'both devices hold both versions');
   await shot('06-conflict');
 
   console.log('5. Joining another folder from the window with a pasted code...');
@@ -199,32 +200,73 @@ try {
   await page.getByRole('button', { name: 'Done' }).click();
   await until(async () => (await text()).includes('Internet server'), 'hub shows as a device');
 
-  console.log('9. Pausing stops changes in both directions until resumed...');
+  console.log('9. Cloud storage: connect a cloud folder, keep a folder in it, and join from it...');
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Connect cloud storage' }).click();
+  await page.getByRole('heading', { name: 'Connect cloud storage' }).waitFor();
+  await pickNext(dirCloud);
+  await page.getByRole('button', { name: 'Choose...' }).click();
+  await page.getByText('Connected MyCloud').waitFor();
+  await page.locator('.card', { hasText: 'Cloud storage' }).getByText('MyCloud', { exact: true }).waitFor();
+  await shot('12-cloud-settings');
+
+  await page.locator('.nav-item', { hasText: 'Notes' }).click();
+  await page.getByRole('button', { name: 'Add another device' }).click();
+  await page.fill('#cloud-name', 'e2e-cloud');
+  await page.getByRole('button', { name: 'Keep in cloud' }).click();
+  await page.getByText('Also kept in').waitFor({ timeout: 30000 });
+  await shot('13-share-cloud');
+  await page.getByRole('button', { name: 'Done' }).click();
+  await page.locator('.row', { hasText: 'MyCloud' }).getByText('Connected', { exact: true }).waitFor({ timeout: 30000 });
+  const cloudId = Object.keys(JSON.parse(fs.readFileSync(env.MYSYNC_GLOBAL_CONFIG, 'utf8')).cloud.accounts)[0];
+  cli(['cloud', 'join', cloudId, 'e2e-cloud', dirE]);
+  assert.strictEqual(read(dirE, 'from-desk.txt'), read(dirA, 'from-desk.txt'), 'another device gets the folder from the cloud');
+  fs.writeFileSync(path.join(dirE, 'via-cloud.txt'), 'through the cloud\n');
+  cli(['sync'], dirE);
+  await until(() => exists(dirA, 'via-cloud.txt'), 'a change made through the cloud reaches the window');
+
+  fs.writeFileSync(path.join(dirF, 'recipe.txt'), 'pancakes\n');
+  cli(['init'], dirF);
+  cli(['cloud', 'link', cloudId, 'e2e-recipes'], dirF);
+  await pickNext(dirG);
+  await page.getByRole('button', { name: /Join a folder$/ }).first().click();
+  await page.getByRole('button', { name: 'From cloud storage' }).click();
+  await page.getByText('e2e-recipes').waitFor();
+  assert.strictEqual(await page.locator('input[name="cloud-ws"][value="e2e-cloud"]').count(), 0, 'folders already here are not offered');
+  await page.getByRole('button', { name: 'Change...' }).click();
+  await until(async () => (await page.inputValue('#join-dest')) === dirG, 'destination chosen');
+  await shot('14-join-cloud');
+  await page.getByRole('button', { name: 'Join folder' }).click();
+  await page.getByRole('heading', { name: 'RecipesHere' }).waitFor({ timeout: 30000 });
+  await until(() => exists(dirG, 'recipe.txt'), 'files arrive from the cloud');
+  await page.locator('.nav-item', { hasText: 'Notes' }).click();
+
+  console.log('10. Pausing stops changes in both directions until resumed...');
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   await page.getByText('Paused', { exact: true }).first().waitFor();
   fs.writeFileSync(path.join(dirB, 'while-paused.txt'), 'later\n');
   await sleep(3500);
   assert(!exists(dirA, 'while-paused.txt'), 'nothing arrives while paused');
-  await shot('12-paused');
+  await shot('15-paused');
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await until(() => exists(dirA, 'while-paused.txt'), 'arrives after resume');
 
-  console.log('10. If the sync engine crashes it restarts by itself and syncing carries on...');
+  console.log('11. If the sync engine crashes it restarts by itself and syncing carries on...');
   await app.evaluate(({ app: electronApp }) => electronApp.mysyncTest.getHost().proc.kill());
   fs.writeFileSync(path.join(dirB, 'after-crash.txt'), 'still works\n');
   await until(() => exists(dirA, 'after-crash.txt'), 'syncing resumes after the engine restarts', 45000);
   await until(async () => (await page.locator('.nav-item', { hasText: 'Notes' }).innerText()).includes('Up to date'), 'status recovers');
 
-  console.log('11. Stopping sync keeps the files...');
+  console.log('12. Stopping sync keeps the files...');
   await page.locator('.nav-item', { hasText: 'JoinedPhotos' }).click();
   await page.getByRole('button', { name: 'Stop syncing this folder' }).click();
   await page.getByText('Stop syncing “JoinedPhotos”?').waitFor();
-  await shot('13-remove');
+  await shot('16-remove');
   await page.getByRole('button', { name: 'Stop syncing', exact: true }).click();
   await page.locator('.nav-item', { hasText: 'JoinedPhotos' }).waitFor({ state: 'detached' });
   assert(exists(dirD, 'holiday.txt'), 'files remain');
 
-  console.log('12. After a restart, folders are remembered and a vanished folder is flagged, not re-created...');
+  console.log('13. After a restart, folders are remembered and a vanished folder is flagged, not re-created...');
   await app.close();
   children.splice(0).forEach((p) => p.kill());
   fs.renameSync(dirA, `${dirA}-moved`);
@@ -234,9 +276,9 @@ try {
   assert.strictEqual(await page.getByText('Welcome to MySync').count(), 0, 'no welcome step the second time');
   await page.getByText('This folder cannot be found').first().waitFor();
   assert(!fs.existsSync(dirA), 'the missing folder was not re-created');
-  await shot('14-missing-folder');
+  await shot('17-missing-folder');
 
-  console.log('\nAll app end-to-end tests passed successfully! [12/12]');
+  console.log('\nAll app end-to-end tests passed successfully! [13/13]');
 } catch (err) {
   try { if (page) await shot('failure'); } catch { /* window may be gone */ }
   console.error(err);

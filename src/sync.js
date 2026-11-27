@@ -15,7 +15,7 @@ import {
   getOrCreateToken,
 } from './repo.js';
 import { checkout } from './branch.js';
-import { readObject, readCommit, readTree, getObjectPath } from './objects.js';
+import { getObjectPath, childHashes, reachableObjects } from './objects.js';
 import {
   fetchRemoteRefs,
   fetchRemoteObjects,
@@ -30,24 +30,17 @@ import { isInviteCode, decodeInvite, hubWorkspaceUrl, buildInvite } from './invi
 import { isValidWorkspaceName } from './hub.js';
 import { scanNearby } from './discovery.js';
 import { snapshot, integrate, isAncestor } from './auto.js';
+import { isCloudUrl, syncCloud } from './cloud.js';
 
 const PUSH_BATCH_BYTES = 8 * 1024 * 1024;
 
-function requirePeer(repoRoot, remoteName) {
+function requirePeer(repoRoot, remoteName, { cloudOk = false } = {}) {
   const peer = getPeer(repoRoot, remoteName);
   if (!peer) throw new Error(`fatal: '${remoteName}' does not appear to be a mysync repository`);
-  return peer;
-}
-
-/** Hashes an object refers to (tree + parents for commits, entries for trees). */
-function childrenOf(repoRoot, hash) {
-  const { type } = readObject(repoRoot, hash);
-  if (type === 'commit') {
-    const commit = readCommit(repoRoot, hash);
-    return [commit.treeHash, ...commit.parentHashes].filter(Boolean);
+  if (!cloudOk && isCloudUrl(peer.url)) {
+    throw new Error(`fatal: '${remoteName}' is cloud storage, which only supports two-way sync. Use \`mysync sync\` or \`mysync watch\``);
   }
-  if (type === 'tree') return readTree(repoRoot, hash).map((entry) => entry.hash);
-  return [];
+  return peer;
 }
 
 /**
@@ -82,36 +75,9 @@ async function downloadMissingObjects(repoRoot, peer, rootHashes) {
       const objPath = getObjectPath(repoRoot, hash);
       fs.mkdirSync(path.dirname(objPath), { recursive: true });
       fs.writeFileSync(objPath, Buffer.from(base64Data, 'base64'));
-      queue.push(...childrenOf(repoRoot, hash));
+      queue.push(...childHashes(repoRoot, hash));
     }
   }
-}
-
-/**
- * Every object name reachable from `start`, skipping history the remote
- * already has (everything reachable from `remoteHead`).
- */
-function collectHashes(repoRoot, start, remoteHead) {
-  const known = new Set();
-  if (remoteHead && fs.existsSync(getObjectPath(repoRoot, remoteHead))) {
-    const stack = [remoteHead];
-    while (stack.length > 0) {
-      const hash = stack.pop();
-      if (known.has(hash)) continue;
-      known.add(hash);
-      stack.push(...readCommit(repoRoot, hash).parentHashes);
-    }
-  }
-
-  const found = new Set();
-  const stack = [start];
-  while (stack.length > 0) {
-    const hash = stack.pop();
-    if (!hash || found.has(hash) || known.has(hash)) continue;
-    found.add(hash);
-    stack.push(...childrenOf(repoRoot, hash));
-  }
-  return [...found];
 }
 
 async function uploadObjects(repoRoot, peer, hashes) {
@@ -347,7 +313,7 @@ function reportIntegration(branch, result) {
   else if (result.action === 'fast-forward') console.log(`Fast-forwarded ${branch} to ${result.commitHash.slice(0, 7)}`);
   else console.log(`Merged into ${branch} at ${result.commitHash.slice(0, 7)}`);
   for (const file of result.conflicts) {
-    console.log(`  conflict in ${file}: both versions kept (see ${file}.conflict-*)`);
+    console.log(`  conflict in ${file}: both versions kept (look for <<<<<<< markers, or a .conflict-* copy for binary files)`);
   }
 }
 
@@ -368,7 +334,7 @@ export async function push(repoRoot, remoteName, branchName) {
   const remoteHash = refs[branch];
   if (remoteHash === localHash) return 'up-to-date';
 
-  const hashes = collectHashes(repoRoot, localHash, remoteHash);
+  const hashes = reachableObjects(repoRoot, localHash, [remoteHash]);
   const missing = await fetchMissingOnRemote(peer, hashes);
   await uploadObjects(repoRoot, peer, missing);
   await updateRemoteRef(peer, branch, localHash);
@@ -383,7 +349,8 @@ export async function push(repoRoot, remoteName, branchName) {
  * @returns {Promise<{ pulled: string, pushed: boolean, conflicts: string[] }>}
  */
 export async function syncPeer(repoRoot, remoteName, { skipSnapshot = false } = {}) {
-  const peer = requirePeer(repoRoot, remoteName);
+  const peer = requirePeer(repoRoot, remoteName, { cloudOk: true });
+  if (isCloudUrl(peer.url)) return syncCloud(repoRoot, remoteName, { skipSnapshot });
   const conflicts = [];
   let pulled = 'up-to-date';
   let pushed = false;
@@ -421,7 +388,7 @@ export async function syncPeer(repoRoot, remoteName, { skipSnapshot = false } = 
     if (!ours || ours === theirs) return { pulled, pushed, conflicts };
 
     try {
-      const hashes = collectHashes(repoRoot, ours, theirs);
+      const hashes = reachableObjects(repoRoot, ours, [theirs]);
       const missing = await fetchMissingOnRemote(peer, hashes);
       await uploadObjects(repoRoot, peer, missing);
       await updateRemoteRef(peer, branch, ours);

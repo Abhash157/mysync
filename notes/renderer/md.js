@@ -1,4 +1,4 @@
-// A small markdown renderer: headings, emphasis, code, quotes, lists, to-dos, links and [[wikilinks]].
+// A small markdown renderer: headings, emphasis, code, quotes, callouts, tables, lists, to-dos, tags, links and [[wikilinks]].
 // Everything is HTML-escaped first, so note content can never inject markup.
 (() => {
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -14,11 +14,15 @@
     });
     s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, (_, t, u) => hold(`<a href="${u}">${t}</a>`));
     s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, p, u) => p + hold(`<a href="${u}">${u}</a>`));
+    s = s.replace(/(^|\s)#([\p{L}_\/-][\p{L}\p{N}_\/-]*)/gu, (_, p, t) => p + hold(`<a class="tag" data-tag="${t}">#${t}</a>`));
+    s = s.replace(/==(.+?)==/g, '<mark>$1</mark>');
     s = s.replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a, b) => '<strong>' + (a || b) + '</strong>');
     s = s.replace(/\*([^*\s][^*]*?)\*/g, '<em>$1</em>');
     s = s.replace(/(^|\W)_([^_]+)_(?=\W|$)/g, '$1<em>$2</em>');
     s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[i]);
+    // Held pieces can sit inside one another (a tag inside a link), so restore until none are left.
+    const restore = (x) => x.replace(/\u0000(\d+)\u0000/g, (_, i) => restore(keep[i]));
+    return restore(s);
   }
 
   const LI = /^(\s*)([-*+]|\d+[.)])\s+(?:\[([ xX])\]\s+)?(.*)$/;
@@ -27,11 +31,30 @@
   const FENCE = /^(```|~~~)/;
   const HEAD = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
   const blockStart = (l) => FENCE.test(l) || HEAD.test(l) || HR.test(l) || QUOTE.test(l) || LI.test(l);
+  const RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+  const tableAt = (L, i, end) => i + 1 < end && L[i].includes('|') && L[i + 1].includes('|') && RULE.test(L[i + 1]);
+  const CALLOUT = /^\[!([\w-]+)\][+-]?\s*(.*)$/;
+
+  const cells = (line) => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+
+  function table(L, i, end, resolve) {
+    const align = cells(L[i + 1]).map((c) => (c.endsWith(':') ? (c.startsWith(':') ? 'center' : 'right') : ''));
+    const row = (line, tag) => {
+      const parts = cells(line);
+      return '<tr>' + align.map((a, k) => `<${tag}${a ? ` class="${a}"` : ''}>${inline(parts[k] || '', resolve)}</${tag}>`).join('') + '</tr>';
+    };
+    const head = cells(L[i]);
+    while (align.length < head.length) align.push('');
+    let j = i + 2;
+    let body = '';
+    while (j < end && L[j].trim() && L[j].includes('|')) body += row(L[j++], 'td');
+    return [`<table><thead>${row(L[i], 'th')}</thead><tbody>${body}</tbody></table>`, j];
+  }
 
   function list(items, k, resolve) {
     const base = items[k].ind;
     const tag = items[k].ord ? 'ol' : 'ul';
-    let h = `<${tag}>`;
+    let h = items[k].num > 1 ? `<${tag} start="${items[k].num}">` : `<${tag}>`;
     while (k < items.length && items[k].ind >= base) {
       const x = items[k++];
       let body = inline(x.txt, resolve);
@@ -65,7 +88,7 @@
         out += `<pre><code>${esc(buf.join('\n'))}</code></pre>`;
         i = j + 1;
       } else if ((m = ln.match(HEAD))) {
-        out += `<h${m[1].length}>${inline(m[2], resolve)}</h${m[1].length}>`;
+        out += `<h${m[1].length} data-l="${i}">${inline(m[2], resolve)}</h${m[1].length}>`;
         i++;
       } else if (HR.test(ln)) {
         out += '<hr>';
@@ -74,13 +97,22 @@
         const Q = L.slice();
         let j = i;
         while (j < end && QUOTE.test(L[j])) { Q[j] = L[j].replace(/^\s{0,3}>\s?/, ''); j++; }
-        out += '<blockquote>' + blocks(Q, i, j, resolve) + '</blockquote>';
+        const call = Q[i].match(CALLOUT);
+        if (call) {
+          const kind = call[1].toLowerCase();
+          const title = call[2] || kind[0].toUpperCase() + kind.slice(1);
+          out += `<div class="callout ${kind}"><div class="callout-title">${inline(title, resolve)}</div>${blocks(Q, i + 1, j, resolve)}</div>`;
+        } else out += '<blockquote>' + blocks(Q, i, j, resolve) + '</blockquote>';
+        i = j;
+      } else if (tableAt(L, i, end)) {
+        const [html, j] = table(L, i, end, resolve);
+        out += html;
         i = j;
       } else if (LI.test(ln)) {
         const items = [];
         let j = i;
         while (j < end && (m = L[j].match(LI))) {
-          items.push({ ind: m[1].replace(/\t/g, '    ').length, ord: /\d/.test(m[2]), chk: m[3], txt: m[4], idx: j });
+          items.push({ ind: m[1].replace(/\t/g, '    ').length, ord: /\d/.test(m[2]), num: parseInt(m[2], 10), chk: m[3], txt: m[4], idx: j });
           j++;
         }
         for (let k = 0; k < items.length; ) {
@@ -92,7 +124,7 @@
       } else {
         const buf = [ln];
         let j = i + 1;
-        while (j < end && L[j].trim() && !blockStart(L[j])) buf.push(L[j++]);
+        while (j < end && L[j].trim() && !blockStart(L[j]) && !tableAt(L, j, end)) buf.push(L[j++]);
         out += '<p>' + buf.map((x) => inline(x, resolve)).join('<br>') + '</p>';
         i = j;
       }
@@ -112,5 +144,20 @@
     return L.join('\n');
   };
 
-  window.md = { render, toggle, esc };
+  // Headings with their line numbers, ignoring anything inside code fences.
+  const headings = (src) => {
+    const out = [];
+    let fence = null;
+    src.split('\n').forEach((l, n) => {
+      l = l.replace(/\r$/, '');
+      if (fence) { if (l.startsWith(fence)) fence = null; return; }
+      const f = l.match(FENCE);
+      if (f) { fence = f[1]; return; }
+      const m = l.match(HEAD);
+      if (m) out.push({ level: m[1].length, text: m[2], line: n });
+    });
+    return out;
+  };
+
+  window.md = { render, inline: (s, resolve = () => true) => inline(s, resolve), toggle, headings, esc };
 })();
